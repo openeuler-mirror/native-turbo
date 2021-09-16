@@ -1,0 +1,69 @@
+From a6d1132f3bb16db4cf9f472f10167d9cac8ff2de Mon Sep 17 00:00:00 2001
+From: Lv Ying <lvying6@huawei.com>
+Date: Thu, 16 Sep 2021 12:12:45 +0800
+Subject: [PATCH 2/2] elf/ld.so: use special mmap for hugepage to get symbols
+ in hugepage area for debug purpose
+
+Signed-off-by: Lv Ying <lvying6(a)huawei.com>
+---
+ elf/dl-load.h                  |  2 --
+ elf/dl-map-segments-hugepage.h | 25 +++----------------------
+ 2 files changed, 3 insertions(+), 24 deletions(-)
+
+diff --git a/elf/dl-load.h b/elf/dl-load.h
+index 288d47da2f6b..401b1aba2135 100644
+--- a/elf/dl-load.h
++++ b/elf/dl-load.h
+@@ -134,8 +134,6 @@ static const char *_dl_map_segments (struct link_map *l, int fd,
+ #if HUGEPAGE_SHARED_LIB
+ #define DL_MAP_SEGMENTS_ERROR_TYPE \
+   N_("cannot map Non shared object file in hugepage")
+-#define DL_MAP_SEGMENTS_ERROR_READ_SEGMENT \
+-  N_("failed to read shared object file")
+ #define DL_MAP_SEGMENTS_ERROR_ARRANGE \
+   N_("shared object's PT_LOAD segment in wrong arrange")
+ #define DL_MAP_SEGMENTS_ERROR_MAP_HOLE_FILL \
+diff --git a/elf/dl-map-segments-hugepage.h b/elf/dl-map-segments-hugepage.h
+index 9803db8bda3a..f9b5a04d2196 100644
+--- a/elf/dl-map-segments-hugepage.h
++++ b/elf/dl-map-segments-hugepage.h
+@@ -300,33 +300,14 @@ _mmap_segment_filesz(struct link_map *l, const struct loadcmd *c, ElfW(Addr) map
+ 
+   size_t mod = len % SIZE_2MB;
+   if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
+-    _dl_debug_printf("\t\tmmap hugepage: [%lx-%lx)\n", mapstart, mapstart + len - mod);
++    _dl_debug_printf("\t\tmmap hugepage: [%lx-%lx), mapoff = %lx\n", mapstart,
++                    mapstart + len - mod, c->mapoff + relro_len + prev_map_len);
+   mapstart = (ElfW(Addr))__mmap((void *)mapstart, len - mod, c->prot,
+                       MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS|MAP_HUGETLB|(SHFIT_2MB << MAP_HUGE_SHIFT),
+-                      -1, 0);
++                      fd, c->mapoff + relro_len + prev_map_len);
+   if (__glibc_unlikely ((void *)mapstart == MAP_FAILED))
+     return DL_MAP_SEGMENTS_ERROR_MAP_SEGMENT;
+ 
+-  if ((c->prot & PROT_WRITE) == 0 && __mprotect((void *)mapstart, len - mod, c->prot | PROT_WRITE) < 0)
+-    {
+-      return DL_MAP_SEGMENTS_ERROR_MPROTECT;
+-    }
+-
+-  /* Read the segment contents from the file. */
+-  size_t file_len = (size_t)(c->dataend - c->mapstart) <= prev_map_len + relro_len ? 0 :
+-                    (size_t)(c->dataend - c->mapstart) - prev_map_len - relro_len;
+-  if (file_len > 0)
+-    {
+-      lseek(fd, c->mapoff + relro_len + prev_map_len, SEEK_SET);
+-      if ( __read(fd, (void *)mapstart, file_len < len - mod ? file_len : len - mod) < 0)
+-        return DL_MAP_SEGMENTS_ERROR_READ_SEGMENT;
+-    }
+-
+-  if ((c->prot & PROT_WRITE) == 0 &&  __mprotect((void *)mapstart, len - mod, c->prot) < 0)
+-    {
+-      return DL_MAP_SEGMENTS_ERROR_MPROTECT;
+-    }
+-
+   map_addr = map_addr == 0 ? (void *)mapstart : map_addr;
+   mapstart += len - mod;
+ 
+-- 
+2.18.4
+
