@@ -1,0 +1,1131 @@
+From f7917612cdc45856d683c0dd39eb024db5791472 Mon Sep 17 00:00:00 2001
+From: Lv Ying <lvying6@huawei.com>
+Date: Thu, 16 Sep 2021 12:12:44 +0800
+Subject: [PATCH 1/2] elf: dynamic linker load shared object use hugepage as
+ much as possible
+
+This patch provides environment variables HUGEPAGE_PROBE and LD_HUGEPAGE_LIB
+to enable load shared object use hugepage.
+
+When load shared object, ld.so first to map text PT_LOAD segment into 2MB
+hugepage area. And then, load the neighbor PT_LOAD segment use 2MB hugepage
+as much as possible. This means:
+* PT_LOAD segment's mapstart_va is 2MB aligned, howerver its maplenth is
+  less than 2MB, fallback to 4KB page
+* PT_LOAD segment's mapstart_va is 2MB aligned, and its maplenth is larger
+  than 2MB, the first 2MB aligned area use 2MB hugepage, the end area (if it exists) use 4KB area
+* PT_LOAD segment's mapstart_va is not 2MB aligned, alignup this address
+  to 2MB aligned address mapstart_align, if its maplenth is less than
+  mapstart_align - mapstart_va, or maplenth - (mapstart_align - mapstart_va), fallback to 4KB hugepage
+* PT_LOAD segment's mapstart_va is not 2MB aligned, maplenth - (mapstart_align - mapstart_va)
+  is still larger than 2MB, first map (mapstart_align - mapstart_va) as 4KB page
+  then map 2MB aligned area as hugepage, the end area (if it exists) use 4KB area
+
+Signed-off-by: Lv Ying <lvying6(a)huawei.com>
+---
+ config.h.in                    |   2 +
+ configure                      |  20 ++
+ configure.ac                   |  11 +
+ elf/Makefile                   |   8 +
+ elf/dl-environ.c               |  11 +
+ elf/dl-load.c                  |  38 +++
+ elf/dl-load.h                  |  16 +
+ elf/dl-map-segments-hugepage.h | 591 +++++++++++++++++++++++++++++++++
+ elf/elf.h                      |   4 +
+ elf/hugepageedit.c             | 136 ++++++++
+ elf/rtld.c                     |  54 ++-
+ sysdeps/generic/ldsodefs.h     |   6 +-
+ 12 files changed, 895 insertions(+), 2 deletions(-)
+ create mode 100644 elf/dl-map-segments-hugepage.h
+ create mode 100644 elf/hugepageedit.c
+
+diff --git a/config.h.in b/config.h.in
+index 141db213a904..027b02727fbd 100644
+--- a/config.h.in
++++ b/config.h.in
+@@ -240,6 +240,8 @@
+ /* Build glibc with tunables support.  */
+ #define HAVE_TUNABLES 0
+ 
++#define  HUGEPAGE_SHARED_LIB  0
++
+ /* Define if static PIE is enabled.  */
+ #define ENABLE_STATIC_PIE 0
+ 
+diff --git a/configure b/configure
+index 95c7646ea8f0..4cd0b6f3cdf0 100755
+--- a/configure
++++ b/configure
+@@ -670,6 +670,7 @@ stack_protector
+ libc_cv_ssp
+ libc_cv_with_fp
+ base_machine
++enable_hugepage_shared_library
+ have_tunables
+ build_pt_chown
+ build_nscd
+@@ -794,6 +795,7 @@ enable_pt_chown
+ enable_tunables
+ enable_mathvec
+ enable_cet
++enable_hugepage_shared_library
+ with_cpu
+ '
+       ac_precious_vars='build_alias
+@@ -1471,6 +1473,9 @@ Optional Features:
+                           depends on architecture]
+   --enable-cet            enable Intel Control-flow Enforcement Technology
+                           (CET), x86 only
++  --enable-hugepage-shared-library
++                          enable shared library use huge page to decrease TLB
++                          miss, x86_64 aarch64 only
+ 
+ Optional Packages:
+   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
+@@ -3785,6 +3790,21 @@ else
+ fi
+ 
+ 
++# Check whether --enable-hugepage-shared-library was given.
++if test "${enable_hugepage_shared_library+set}" = set; then :
++  enableval=$enable_hugepage_shared_library; enable_hugepage_shared_library=$enableval
++else
++  enable_hugepage_shared_library=no
++fi
++
++
++config_vars="$config_vars
++enable-hugepage-shared-library = $enable_hugepage_shared_library"
++if test "$enable_hugepage_shared_library" = yes; then
++  $as_echo "#define HUGEPAGE_SHARED_LIB 1" >>confdefs.h
++
++fi
++
+ # We keep the original values in `$config_*' and never modify them, so we
+ # can write them unchanged into config.make.  Everything else uses
+ # $machine, $vendor, and $os, and changes them whenever convenient.
+diff --git a/configure.ac b/configure.ac
+index 4df72a755ad9..cc9cd7479b53 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -478,6 +478,17 @@ AC_ARG_ENABLE([cet],
+ 	      [enable_cet=$enableval],
+ 	      [enable_cet=no])
+ 
++AC_ARG_ENABLE([hugepage-shared-library],
++              AC_HELP_STRING([--enable-hugepage-shared-library],
++                             [enable shared library use huge page to decrease TLB miss, x86_64 aarch64 only]),
++              [enable_hugepage_shared_library=$enableval],
++              [enable_hugepage_shared_library=no])
++AC_SUBST(enable_hugepage_shared_library)
++LIBC_CONFIG_VAR([enable-hugepage-shared-library], [$enable_hugepage_shared_library])
++if test "$enable_hugepage_shared_library" = yes; then
++  AC_DEFINE(HUGEPAGE_SHARED_LIB)
++fi
++
+ # We keep the original values in `$config_*' and never modify them, so we
+ # can write them unchanged into config.make.  Everything else uses
+ # $machine, $vendor, and $os, and changes them whenever convenient.
+diff --git a/elf/Makefile b/elf/Makefile
+index 302ce378b171..95dae070de64 100644
+--- a/elf/Makefile
++++ b/elf/Makefile
+@@ -117,6 +117,14 @@ others-extras   = $(ldconfig-modules)
+ endif
+ endif
+ 
++ifeq (yes,$(enable-hugepage-shared-library))
++others += hugepageedit
++others-pie += hugepageedit
++install-bin += hugepageedit
++
++$(objpfx)hugepageedit: $(objpfx)hugepageedit.o
++endif
++
+ # This needs to be statically linked because it is executed at a time
+ # when there might be incompatible shared objects on disk, and the
+ # purpose of this program is to remove them (among other things).
+diff --git a/elf/dl-environ.c b/elf/dl-environ.c
+index b20045b870fe..ece021a19f35 100644
+--- a/elf/dl-environ.c
++++ b/elf/dl-environ.c
+@@ -31,6 +31,17 @@ _dl_next_ld_env_entry (char ***position)
+ 
+   while (*current != NULL)
+     {
++#if HUGEPAGE_SHARED_LIB
++      #define LEN_HUGEPAGE_PROBE (sizeof("HUGEPAGE_PROBE") - 1)
++      if (memcmp (*current, "HUGEPAGE_PROBE", LEN_HUGEPAGE_PROBE) == 0)
++        {
++          result = *current;
++
++          /* Save current position for next visit.  */
++          *position = ++current;
++          break;
++        }
++#endif
+       if (__builtin_expect ((*current)[0] == 'L', 0)
+ 	  && (*current)[1] == 'D' && (*current)[2] == '_')
+ 	{
+diff --git a/elf/dl-load.c b/elf/dl-load.c
+index f60e687639b2..acc4e29e4211 100644
+--- a/elf/dl-load.c
++++ b/elf/dl-load.c
+@@ -72,6 +72,9 @@ struct filebuf
+ #include <dl-sysdep-open.h>
+ #include <dl-prop.h>
+ #include <not-cancel.h>
++#if HUGEPAGE_SHARED_LIB
++#include <dl-map-segments-hugepage.h>
++#endif
+ 
+ #include <endian.h>
+ #if BYTE_ORDER == BIG_ENDIAN
+@@ -1039,6 +1042,9 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
+     struct loadcmd loadcmds[l->l_phnum];
+     size_t nloadcmds = 0;
+     bool has_holes = false;
++#if HUGEPAGE_SHARED_LIB
++    bool use_hugepage = false;
++#endif
+ 
+     /* The struct is initialized to zero so this is not necessary:
+     l->l_ld = 0;
+@@ -1103,6 +1109,11 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
+ 	  if (nloadcmds > 1 && c[-1].mapend != c->mapstart)
+ 	    has_holes = true;
+ 
++#if HUGEPAGE_SHARED_LIB
++    if (ph->p_flags & PF_HUGEPAGE)
++      use_hugepage = true;
++#endif
++
+ 	  /* Optimize a common case.  */
+ #if (PF_R | PF_W | PF_X) == 7 && (PROT_READ | PROT_WRITE | PROT_EXEC) == 7
+ 	  c->prot = (PF_TO_PROT
+@@ -1196,12 +1207,39 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
+     /* Length of the sections to be loaded.  */
+     maplength = loadcmds[nloadcmds - 1].allocend - loadcmds[0].mapstart;
+ 
++#if HUGEPAGE_SHARED_LIB
++#define ERRSTRING_BUF_LEN 1024
++    int hp_errcode = 0;
++    char hp_buf[ERRSTRING_BUF_LEN];
++    if ((GLRO(dl_debug_mask) & DL_HUGEPAGE_LIB_LARGE_IN_FLAG) ||
++            ((GLRO(dl_debug_mask) & DL_HUGEPAGE_PROBE_FLAG) && use_hugepage))
++      {
++        errstring = _dl_map_segments_largein (l, fd, header, type, loadcmds, nloadcmds,
++            maplength, has_holes);
++        if (__glibc_unlikely (errstring != NULL))
++          {
++            hp_errcode = errno;
++            /* __strerror_r will set hp_buf last character '\0', hp_buf will not overflow */
++            if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++              _dl_debug_printf ("_dl_map_segments_largein: %s, %s\n", errstring,
++                                hp_errcode ? __strerror_r (hp_errcode, hp_buf, sizeof hp_buf) : "");
++            goto fallback;
++          }
++      }
++    else
++      {
++      fallback:
++        errstring = _dl_map_segments (l, fd, header, type, loadcmds, nloadcmds,
++				    maplength, has_holes, loader);
++      }
++#else
+     /* Now process the load commands and map segments into memory.
+        This is responsible for filling in:
+        l_map_start, l_map_end, l_addr, l_contiguous, l_text_end, l_phdr
+      */
+     errstring = _dl_map_segments (l, fd, header, type, loadcmds, nloadcmds,
+ 				  maplength, has_holes, loader);
++#endif
+     if (__glibc_unlikely (errstring != NULL))
+       goto call_lose;
+   }
+diff --git a/elf/dl-load.h b/elf/dl-load.h
+index 66ea2e9237ab..288d47da2f6b 100644
+--- a/elf/dl-load.h
++++ b/elf/dl-load.h
+@@ -131,5 +131,21 @@ static const char *_dl_map_segments (struct link_map *l, int fd,
+ #define DL_MAP_SEGMENTS_ERROR_MAP_ZERO_FILL \
+   N_("cannot map zero-fill pages")
+ 
++#if HUGEPAGE_SHARED_LIB
++#define DL_MAP_SEGMENTS_ERROR_TYPE \
++  N_("cannot map Non shared object file in hugepage")
++#define DL_MAP_SEGMENTS_ERROR_READ_SEGMENT \
++  N_("failed to read shared object file")
++#define DL_MAP_SEGMENTS_ERROR_ARRANGE \
++  N_("shared object's PT_LOAD segment in wrong arrange")
++#define DL_MAP_SEGMENTS_ERROR_MAP_HOLE_FILL \
++  N_("failed to mmap shared object's hole part of PT_LOAD")
++#define DL_MAP_RESERVED_HUGEPAGE_AREA_ERROR \
++  N_("failed to map reserved 2MB contiguous hugepage va space")
++#define DL_FIND_EXEC_SEGMENT_ERROR  \
++  N_("fail to find exec prot segment")
++#define DL_MAP_SEGMENT_ERROR_EXTRA_SIZE \
++  N_("wrong segment extra size")
++#endif
+ 
+ #endif	/* dl-load.h */
+diff --git a/elf/dl-map-segments-hugepage.h b/elf/dl-map-segments-hugepage.h
+new file mode 100644
+index 000000000000..9803db8bda3a
+--- /dev/null
++++ b/elf/dl-map-segments-hugepage.h
+@@ -0,0 +1,591 @@
++/* Map a shared object's segments into hugepage.  Generic version.
++   Copyright (C) 1995-2021 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <dl-load.h>
++
++#define SHFIT_2MB 21
++#define SIZE_2MB 0x200000
++#define MASK_2MB 0x1FFFFF
++#define THRESHOLD 16
++
++/*
++ * Find the first PT_LOAD segment with execute permission
++ */
++static __always_inline const struct loadcmd *
++_find_exec_segment(const struct loadcmd loadcmds[], size_t nloadcmds)
++{
++  const struct loadcmd *c = loadcmds;
++
++  while (c < &loadcmds[nloadcmds])
++    {
++      if (c->prot & PROT_EXEC)
++        return c;
++      c++;
++    }
++  return NULL;
++}
++
++static __always_inline void *
++__mmap_reserved_area(const struct loadcmd loadcmds[], size_t nloadcmds,
++                    size_t *maparealen)
++{
++  const struct loadcmd * c = loadcmds;
++  *maparealen = 0;
++
++  while (c < &loadcmds[nloadcmds])
++    {
++      *maparealen += ALIGN_UP((c->mapend > c->allocend ? c->mapend : c->allocend), SIZE_2MB) -
++                      ALIGN_DOWN(c->mapstart, SIZE_2MB);
++      c++;
++    }
++
++  /*
++   * Get 2MB aligned contiguous va space
++   * This va space can not be munmap in case of multi thread dlopen concurrently
++   */
++  void *map_area_start = __mmap(0, *maparealen, PROT_NONE,
++    MAP_PRIVATE|MAP_ANONYMOUS|MAP_HUGETLB|(SHFIT_2MB << MAP_HUGE_SHIFT), -1, 0);
++  if (__glibc_unlikely (map_area_start == MAP_FAILED))
++    return MAP_FAILED;
++
++  /*
++   * Remap 2MB aligned contiguous va space into 4KB contiguous va space
++   * to avoid the tedious work of splitting hugepage into 4KB page
++   */
++  if (__glibc_unlikely(__mmap(map_area_start, *maparealen, PROT_NONE,
++                              MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED, -1, 0)
++                        == MAP_FAILED))
++    {
++      goto unmap_reserved_area;
++    }
++  return map_area_start;
++
++unmap_reserved_area:
++  __munmap(map_area_start, *maparealen);
++  return MAP_FAILED;
++}
++
++static __always_inline size_t
++_get_relro_len(struct link_map *l, const struct loadcmd *c)
++{
++  size_t relro_len = 0;
++  if (c->mapstart == ALIGN_DOWN (l->l_relro_addr, GLRO(dl_pagesize)))
++    {
++      relro_len = ALIGN_DOWN(l->l_relro_addr + l->l_relro_size, GLRO(dl_pagesize)) -
++                  ALIGN_DOWN(l->l_relro_addr, GLRO(dl_pagesize));
++    }
++  return relro_len;
++}
++
++/*
++ * the alignment stands for the size of page which is to be cleared to zero
++ */
++static __always_inline const char *
++_zero_tail_page(const struct loadcmd *c, ElfW(Addr) zero, ElfW(Addr) zeropage,
++                size_t alignment)
++{
++  if (__glibc_unlikely ((c->prot & PROT_WRITE) == 0))
++    {
++      /* Dag nab it.  */
++      if (__mprotect ((caddr_t) ALIGN_DOWN(zero, alignment), alignment,
++                      c->prot|PROT_WRITE) < 0)
++        return DL_MAP_SEGMENTS_ERROR_MPROTECT;
++    }
++    memset ((void *) zero, '\0', zeropage - zero);
++    if (__glibc_unlikely ((c->prot & PROT_WRITE) == 0))
++      __mprotect ((caddr_t) ALIGN_DOWN(zero, alignment), alignment, c->prot);
++    return NULL;
++}
++
++static __always_inline const char *
++_mmap_remain_zero_page(ElfW(Addr) zeropage, ElfW(Addr) zeroend, int prot)
++{
++  ElfW(Addr) hp_start = ALIGN_UP(zeropage, SIZE_2MB);
++  size_t len = 0, mod = 0;
++  caddr_t mapat;
++
++  if (zeroend > hp_start && zeroend - hp_start >= SIZE_2MB)
++    {
++      len = zeroend - hp_start;
++      mod = len % SIZE_2MB;
++    }
++  else
++    hp_start = 0;
++
++  if (hp_start == 0)
++    {
++      mapat = __mmap((caddr_t) zeropage, zeroend - zeropage, prot,
++                        MAP_ANON|MAP_PRIVATE|MAP_FIXED, -1, 0);
++      if (__glibc_unlikely (mapat == MAP_FAILED))
++        return DL_MAP_SEGMENTS_ERROR_MAP_ZERO_FILL;
++      return NULL;
++    }
++
++  if (hp_start - zeropage > 0)
++    {
++      mapat =  __mmap((caddr_t) zeropage, hp_start - zeropage,
++                              prot, MAP_ANON|MAP_PRIVATE|MAP_FIXED, -1, 0);
++      if (__glibc_unlikely (mapat == MAP_FAILED))
++        return DL_MAP_SEGMENTS_ERROR_MAP_ZERO_FILL;
++    }
++
++  mapat = __mmap((caddr_t) hp_start, len - mod, prot,
++                  MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS|MAP_HUGETLB|(SHFIT_2MB << MAP_HUGE_SHIFT),
++                  -1, 0);
++  if (__glibc_unlikely (mapat == MAP_FAILED))
++    return DL_MAP_SEGMENTS_ERROR_MAP_ZERO_FILL;
++
++  if (mod > 0)
++    {
++      mapat =__mmap((caddr_t)(hp_start + len - mod), mod, prot,
++                      MAP_ANON|MAP_PRIVATE|MAP_FIXED, -1, 0);
++    if (__glibc_unlikely (mapat == MAP_FAILED))
++      return DL_MAP_SEGMENTS_ERROR_MAP_ZERO_FILL;
++    }
++
++  return NULL;
++}
++
++/*
++ * memsz_len records the remain memsiz part
++ */
++static __always_inline const char *
++_mmap_segment_memsz(struct link_map *l, const struct loadcmd * c,
++                ElfW(Addr) mapstart, size_t extra_len, size_t *memsz_len)
++{
++  const char * errstring = NULL;
++
++  /* Extra zero pages should appear at the end of this segment,
++     after the data mapped from the file.   */
++  ElfW(Addr) zero, zeroend, zeropage;
++
++  zero = mapstart + c->dataend - c->mapstart;
++  zeroend = mapstart + c->allocend - c->mapstart;
++  zeropage = ALIGN_UP(zero, GLRO(dl_pagesize));
++  size_t alignment = GLRO(dl_pagesize);
++  *memsz_len = 0;
++
++  /*
++   * no matter what the extra space consists of:
++   * 1. all the extra space is initialized data area (MemSiz > FileSiz)
++   * 2. initialized data area and hole
++   * 3. all the extra space is hole (MemSiz == FileSiz)
++   *
++   * the extra space just needs to be set zero, for the initialized data area, it's
++   * initialized to zero; for the hole area, it's initialized to invalid instruction
++   */
++  if (extra_len > 0)
++    {
++      if (__glibc_unlikely(zeropage == ALIGN_UP(zero, SIZE_2MB) ||
++                            zeropage + extra_len != ALIGN_UP(zero, SIZE_2MB)))
++        return DL_MAP_SEGMENT_ERROR_EXTRA_SIZE;
++
++      zeropage = ALIGN_UP(zero, SIZE_2MB);
++      alignment = SIZE_2MB;
++    }
++  else
++    {
++      /*
++       * extra_len = 0, _mmap_segment_filesz just mmap segment's FileSiz part,
++       * here, it needs to zero tail page [FileSiz end, tail page end) part
++       */
++      if (c->allocend <= c->dataend)
++        return NULL;
++
++      if (ALIGN_UP(zero, GLRO(dl_pagesize)) == ALIGN_UP(zero, SIZE_2MB) &&
++            (zeropage - (mapstart + _get_relro_len(l, c)) >= SIZE_2MB))
++        {
++          alignment = SIZE_2MB;
++        }
++
++      if (zeroend < zeropage)
++        zeropage = zeroend;
++    }
++
++  if (zeropage > zero)
++    {
++        if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++          _dl_debug_printf("\t\tzero tail page [%lx-%lx) which contains hole area length: 0x%lx\n",
++                          zero, zeropage, zeropage > ALIGN_UP(zero, GLRO(dl_pagesize)) ?
++                          zeropage - ALIGN_UP(zero, GLRO(dl_pagesize)) : 0);
++        errstring = _zero_tail_page(c, zero, zeropage, alignment);
++        if (errstring != NULL)
++          return errstring;
++    }
++
++  if (zeroend > zeropage)
++    {
++      *memsz_len = ALIGN_UP(zeroend, GLRO(dl_pagesize)) - zeropage;
++      if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++        _dl_debug_printf("\t\tzero remain page [%lx-%lx)\n", zeropage, zeroend);
++      errstring = _mmap_remain_zero_page(zeropage, zeroend, c->prot);
++    }
++  return errstring;
++}
++
++/*
++ * mmap as fixed addr, if the middle part is 2MB aligned,
++ * this part should be mmaped in 2MB aligned, else in 4KB aligned
++ * 2MB hugepage area should be set with correct permissions, no need to remap
++ */
++static __always_inline const char *
++_mmap_segment_filesz(struct link_map *l, const struct loadcmd *c, ElfW(Addr) mapstart,
++              size_t extra_len, int fd)
++{
++  void *map_addr = 0;
++
++  size_t relro_len = _get_relro_len(l, c);
++  if (relro_len > 0)
++    {
++      if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++        _dl_debug_printf("\t\tmmap relro: [%lx-%lx)\n", mapstart, mapstart + relro_len);
++      /*
++       * relro part must be mapped as normal page size to avoid
++       * _dl_protect_relro failure
++       */
++      map_addr =  __mmap((void *)mapstart, relro_len, c->prot,
++                          MAP_PRIVATE|MAP_FIXED|MAP_FILE,
++                          fd, c->mapoff);
++      if (__glibc_unlikely (map_addr == MAP_FAILED))
++        return DL_MAP_SEGMENTS_ERROR_MAP_SEGMENT;
++
++      mapstart += relro_len;
++    }
++
++  size_t prev_map_len = ALIGN_UP(mapstart, SIZE_2MB) - mapstart;
++  size_t len = (c->mapend + extra_len) - (c->mapstart + relro_len);
++  if (len <= prev_map_len || len - prev_map_len < SIZE_2MB)
++    {
++      if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++        _dl_debug_printf("\t\tmmap all: [%lx-%lx), which includes prev_map_len(0x%lx)\n",
++                        mapstart, mapstart + len, prev_map_len);
++      mapstart = (ElfW(Addr))__mmap((void *)mapstart, len, c->prot,
++                                    MAP_PRIVATE|MAP_FIXED|MAP_FILE,
++                                    fd, c->mapoff + relro_len);
++      if (__glibc_unlikely ((void *)mapstart == MAP_FAILED))
++        return DL_MAP_SEGMENTS_ERROR_MAP_SEGMENT;
++      return NULL;
++    }
++
++  if (prev_map_len > 0)
++    {
++      if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++        _dl_debug_printf("\t\tmmap prev_map_len: [%lx-%lx)\n",
++                         mapstart, mapstart + prev_map_len);
++      mapstart = (ElfW(Addr))__mmap((void *)mapstart, prev_map_len, c->prot,
++                        MAP_PRIVATE|MAP_FIXED|MAP_FILE,
++                        fd, c->mapoff + relro_len);
++      if (__glibc_unlikely ((void *)mapstart == MAP_FAILED))
++        return DL_MAP_SEGMENTS_ERROR_MAP_SEGMENT;
++
++      map_addr = map_addr == 0 ? (void *)mapstart : map_addr;
++      mapstart += prev_map_len;
++      len -= prev_map_len;
++    }
++
++  size_t mod = len % SIZE_2MB;
++  if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++    _dl_debug_printf("\t\tmmap hugepage: [%lx-%lx)\n", mapstart, mapstart + len - mod);
++  mapstart = (ElfW(Addr))__mmap((void *)mapstart, len - mod, c->prot,
++                      MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS|MAP_HUGETLB|(SHFIT_2MB << MAP_HUGE_SHIFT),
++                      -1, 0);
++  if (__glibc_unlikely ((void *)mapstart == MAP_FAILED))
++    return DL_MAP_SEGMENTS_ERROR_MAP_SEGMENT;
++
++  if ((c->prot & PROT_WRITE) == 0 && __mprotect((void *)mapstart, len - mod, c->prot | PROT_WRITE) < 0)
++    {
++      return DL_MAP_SEGMENTS_ERROR_MPROTECT;
++    }
++
++  /* Read the segment contents from the file. */
++  size_t file_len = (size_t)(c->dataend - c->mapstart) <= prev_map_len + relro_len ? 0 :
++                    (size_t)(c->dataend - c->mapstart) - prev_map_len - relro_len;
++  if (file_len > 0)
++    {
++      lseek(fd, c->mapoff + relro_len + prev_map_len, SEEK_SET);
++      if ( __read(fd, (void *)mapstart, file_len < len - mod ? file_len : len - mod) < 0)
++        return DL_MAP_SEGMENTS_ERROR_READ_SEGMENT;
++    }
++
++  if ((c->prot & PROT_WRITE) == 0 &&  __mprotect((void *)mapstart, len - mod, c->prot) < 0)
++    {
++      return DL_MAP_SEGMENTS_ERROR_MPROTECT;
++    }
++
++  map_addr = map_addr == 0 ? (void *)mapstart : map_addr;
++  mapstart += len - mod;
++
++  if (__glibc_unlikely (extra_len > 0 && mod > 0))
++    return DL_MAP_SEGMENT_ERROR_EXTRA_SIZE;
++
++  if (mod > 0 && __glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++    _dl_debug_printf("\t\tmmap tail part: [%lx-%lx)\n", mapstart, mapstart + mod);
++  if (mod > 0 && __mmap((void *)mapstart, mod, c->prot,
++                MAP_PRIVATE|MAP_FIXED|MAP_FILE,
++                fd, c->mapoff + relro_len + prev_map_len + len - mod)
++              == MAP_FAILED)
++    {
++      return DL_MAP_SEGMENTS_ERROR_MAP_SEGMENT;
++    }
++  return NULL;
++}
++
++/*
++ * mmap segment filesz tail part only covers the very first part of hugepage,
++ * if the size of this tail part reach the threshold, map the tail part in hugepage
++ *
++ * The tail part must be calculated by mapend, because this is file mmaping,
++ * if tail part is calculated by allocend, it will mmap invalid data in file
++ * s: mapstart mp: mapend ac: allocend
++ * 1. [s, mp) can not cover the tail hugepage start, mp, s, ac are all in same hugepage, no extra space
++ *    s mp ac
++ *    | |  |
++ * |--------|--------|
++ *
++ * 2. [s, mp) can not cover the tail hugepage start, ac is in the behind hugepage, no extra space
++ *    s mp            ac
++ *    | |             |
++ * |--------|--------|--------|
++ *
++ * 3. [s, mp) covers the tail hugepage start, mp and the ac in the same hugepage,
++ * if (ac - ALIGN_DOWN(mp, SIZE_2MB) < threshold, no extra space; else extra space
++ * [mp, ALIGN_UP(mp, SIZE_2MB) which contains initialized data area and hole
++ * if ac == mp, the extra space only contains hole
++ *      s1           s2  mp ac
++ *      |            |   |  |
++ * |--------|--------|--------|
++ *
++ * 4. [s, mp) covers the tail hugepage start, ac is in the behind hugepage,
++ * the extra space is [mp, ALIGN_UP(mp, SIZE_2MB) which only contains initialized data area
++ *    s1             s2  mp               ac
++ *    |              |   |                |
++ * |--------|--------|--------|--------|--------|
++ *
++ * 5. if mp is 2MB aligned, no matter [s, mp) covers the tail hugepage start or not,
++ * no extra area
++ *    s1             s2  s3   mp           ac
++ *    |              |   |    |            |
++ * |--------|--------|--------|--------|--------|
++ *
++ * there are a few points to note:
++ * 1. the extra part shold not overlap with the next segment
++ * 2. PT_LOAD segment which contains relro section should update mapstart
++ */
++static __always_inline size_t
++_extra_mmap(struct link_map *l, const struct loadcmd loadcmds[], size_t nloadcmds,
++            const struct loadcmd *c, ElfW(Addr) mapstart)
++{
++  ElfW(Addr) mapend = mapstart + (c->mapend - c->mapstart);
++  ElfW(Addr) hugepage = ALIGN_DOWN(mapend, SIZE_2MB);
++  size_t relro_len = _get_relro_len(l, c);
++  mapstart += relro_len;
++
++  /*
++   * 1. mapend is 2MB aligned
++   * 2. [mapstart, mapend) does not cover the tail hugepage start
++   */
++  if (mapend == ALIGN_UP(mapend, SIZE_2MB) || mapstart > hugepage)
++    return 0;
++
++  /* the initialized data area end in the tail hugepage */
++  ElfW(Addr) end = (mapstart - relro_len) + ALIGN_UP(c->allocend - c->mapstart, GLRO(dl_pagesize)) >=
++                    ALIGN_UP(mapend, SIZE_2MB) ? ALIGN_UP(mapend, SIZE_2MB) :
++                    (mapstart - relro_len) + ALIGN_UP(c->allocend - c->mapstart, GLRO(dl_pagesize));
++
++  size_t extra_len = ALIGN_UP(mapend, SIZE_2MB) - mapend;
++  if ((end - hugepage < THRESHOLD * GLRO(dl_pagesize)) || ((c < loadcmds + (nloadcmds - 1)) &&
++      (ALIGN_UP(mapend, SIZE_2MB) > (mapstart - relro_len) + c[1].mapstart - c->mapstart)))
++    {
++      extra_len = 0;
++    }
++
++  return extra_len;
++}
++
++/*
++ * PT_LOAD segment is described by p_filesz and p_memsz.
++ * The bytes from the file are mapped to the beginning of the memory segment.
++ * If the segment’s memory size (p_memsz) is larger than the file size (p_filesz),
++ * the extra bytes are defined to hold the value 0 and to follow the segment’s
++ * initialized area
++ */
++static __always_inline const char *
++_mmap_segment(struct link_map *l, const struct loadcmd loadcmds[], size_t nloadcmds,
++              const struct loadcmd *c, ElfW(Addr) mapstart, int fd, size_t *mapseglen)
++{
++  const char * errstring = NULL;
++  size_t extra_len = _extra_mmap(l, loadcmds, nloadcmds, c, mapstart);
++  size_t memsz_len = 0;
++  if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++    _dl_debug_printf("\t%s(0x%lx): extra_len = 0x%lx\n\t{\n", __func__,
++                    (unsigned long)c, extra_len);
++
++  errstring = _mmap_segment_filesz(l, c, mapstart, extra_len, fd);
++  if (__glibc_unlikely (errstring != NULL))
++    return errstring;
++  errstring = _mmap_segment_memsz(l, c, mapstart, extra_len, &memsz_len);
++  if (__glibc_unlikely (errstring != NULL))
++    return errstring;
++
++  *mapseglen = c->mapend - c->mapstart + extra_len + memsz_len;
++  if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++    _dl_debug_printf("\t} => mapseglen = 0x%lx, memsz_len = 0x%lx\n", *mapseglen, memsz_len);
++  return NULL;
++}
++
++static __always_inline void *
++_mmap_hole(const struct loadcmd *current, const struct loadcmd *next,
++          ElfW(Addr) mapstart, size_t mapseglen, int fd)
++{
++  if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++    _dl_debug_printf("\tmmap hole area:[%lx-%lx)\n", mapstart + mapseglen,
++                      mapstart + (next->mapstart - current->mapstart));
++  return __mmap((void *)(mapstart + mapseglen),
++                next->mapstart - (current->mapstart + mapseglen),
++                PROT_NONE, MAP_FILE|MAP_PRIVATE|MAP_FIXED,
++                fd, current->mapoff + mapseglen);
++}
++
++static __always_inline const char *
++_dl_map_segments_largein (struct link_map *l, int fd,
++                  const ElfW(Ehdr) *header, int type,
++                  const struct loadcmd loadcmds[], size_t nloadcmds,
++                  const size_t maplength, bool has_holes)
++{
++  if (__glibc_unlikely (type != ET_DYN))
++    return DL_MAP_SEGMENTS_ERROR_TYPE;
++
++  const char *errstring = NULL;
++  const struct loadcmd *text = _find_exec_segment(loadcmds, nloadcmds);
++  if (__glibc_unlikely (text == NULL))
++    return DL_FIND_EXEC_SEGMENT_ERROR;
++
++  size_t maparealen;
++  void *map_area_start = __mmap_reserved_area(loadcmds, nloadcmds, &maparealen);
++  if (__glibc_unlikely (map_area_start == MAP_FAILED))
++    return DL_MAP_RESERVED_HUGEPAGE_AREA_ERROR;
++  if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++    _dl_debug_printf("reserved area:[%lx-%lx)\n",
++      (unsigned long)map_area_start, (unsigned long)map_area_start + maparealen);
++
++  /* First to mmap text segment */
++  const struct loadcmd * c = loadcmds;
++  ElfW(Addr) text_addr = ALIGN_UP((ElfW(Addr))map_area_start + (text->mapstart - c->mapstart), SIZE_2MB);
++  size_t mapseglen;
++  errstring = _mmap_segment(l, loadcmds, nloadcmds, text, text_addr, fd, &mapseglen);
++  if (__glibc_unlikely(errstring != NULL))
++    goto unmap_reserved_area;
++
++  const struct loadcmd *prev = text;
++  c = text + 1;
++  ElfW(Addr) map_addr = text_addr;
++  while (c < &loadcmds[nloadcmds])
++    {
++      if (prev->mapstart + mapseglen > c->mapstart || c->mapstart < prev->mapstart)
++        {
++          errstring = DL_MAP_SEGMENTS_ERROR_ARRANGE;
++          goto unmap_reserved_area;
++        }
++
++      if (prev->mapstart + mapseglen < c->mapstart &&
++            _mmap_hole(prev, c, map_addr, mapseglen, fd) == MAP_FAILED)
++        {
++          errstring = DL_MAP_SEGMENTS_ERROR_MAP_HOLE_FILL;
++          goto unmap_reserved_area;
++        }
++
++      map_addr += c->mapstart - prev->mapstart;
++      errstring = _mmap_segment(l, loadcmds, nloadcmds, c, map_addr, fd, &mapseglen);
++      if (__glibc_unlikely(errstring != NULL))
++        goto unmap_reserved_area;
++      prev = c;
++      ++c;
++    }
++  ElfW(Addr) l_map_end = map_addr + mapseglen;
++
++  /* search for the first segment */
++  prev = text;
++  c = text - 1;
++  map_addr = text_addr;
++  while (c >= loadcmds)
++    {
++      if (prev->mapstart < c->mapstart)
++        {
++          errstring = DL_MAP_SEGMENTS_ERROR_ARRANGE;
++          goto unmap_reserved_area;
++        }
++
++      map_addr -= prev->mapstart - c->mapstart;
++      errstring = _mmap_segment(l, loadcmds, nloadcmds, c, map_addr, fd, &mapseglen);
++      if (__glibc_unlikely(errstring != NULL))
++        goto unmap_reserved_area;
++
++      if (c->mapstart + mapseglen > prev->mapstart)
++        {
++          errstring = DL_MAP_SEGMENTS_ERROR_ARRANGE;
++          goto unmap_reserved_area;
++        }
++
++      if (c->mapstart + mapseglen < prev->mapstart &&
++            _mmap_hole(c, prev, map_addr, mapseglen, fd) == MAP_FAILED)
++        {
++          errstring = DL_MAP_SEGMENTS_ERROR_MAP_HOLE_FILL;
++          goto unmap_reserved_area;
++        }
++      prev = c;
++      --c;
++    }
++
++  ++c;
++  l->l_map_start = map_addr;
++  l->l_map_end = l->l_map_start + maplength;
++  l->l_addr = l->l_map_start - c->mapstart;
++  l->l_contiguous = 1;
++
++  c = loadcmds;
++  while (c < &loadcmds[nloadcmds])
++    {
++      _dl_postprocess_loadcmd (l, header, c);
++      ++c;
++    }
++
++  if (l->l_map_start > (ElfW(Addr))map_area_start)
++    {
++      if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++        _dl_debug_printf("__munmap [%lx-%lx)\n",  (ElfW(Addr))map_area_start, l->l_map_start);
++      __munmap(map_area_start, l->l_map_start - (ElfW(Addr))map_area_start);
++    }
++
++  /*
++   * l->l_map_end is caculated by maplength, l_map_end may end with extra space
++   * use l->l_map_end may munmap extra space part
++   */
++  if ((ElfW(Addr))map_area_start + maparealen > l_map_end)
++    {
++      if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++        _dl_debug_printf("__munmap [%lx-%lx)\n", l_map_end, (ElfW(Addr))map_area_start + maparealen);
++      __munmap((void *)l_map_end, (ElfW(Addr))map_area_start + maparealen - l_map_end);
++    }
++
++  return NULL;
++
++unmap_reserved_area:
++  __munmap(map_area_start, maparealen);
++
++  return errstring;
++}
+diff --git a/elf/elf.h b/elf/elf.h
+index 7e2b072a7f75..f840cbe67f09 100644
+--- a/elf/elf.h
++++ b/elf/elf.h
+@@ -730,6 +730,10 @@ typedef struct
+ 
+ /* Legal values for p_flags (segment flags).  */
+ 
++#if HUGEPAGE_SHARED_LIB
++/* libhugetlbfs's hugeedit use 0x00100000 */
++#define PF_HUGEPAGE (0x01000000)
++#endif
+ #define PF_X		(1 << 0)	/* Segment is executable */
+ #define PF_W		(1 << 1)	/* Segment is writable */
+ #define PF_R		(1 << 2)	/* Segment is readable */
+diff --git a/elf/hugepageedit.c b/elf/hugepageedit.c
+new file mode 100644
+index 000000000000..cacc05606e95
+--- /dev/null
++++ b/elf/hugepageedit.c
+@@ -0,0 +1,136 @@
++/* Mark ELF object ELF header hugepage flag Generic version.
++   Copyright (C) 1995-2021 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++#include <stdio.h>
++#include <stdlib.h>
++#include <fcntl.h>
++#include <string.h>
++#include <unistd.h>
++#include <elf.h>
++#include <link.h>
++#include <sys/stat.h>
++#include <sys/mman.h>
++#include <sys/types.h>
++
++/* reference kernel load_elf_phdrs program header table size constraint */
++#define ELF_MIN_ALIGN 4096
++#define TOOL_NAME "hugepageedit"
++
++int check_ptr(void *ptr, void *start, size_t len)
++{
++  if (ptr < start || ptr > start + len)
++    return -1;
++  return 0;
++}
++
++void print_usage(void)
++{
++  fprintf(stderr, "%s <ELF file>\n", TOOL_NAME);
++}
++
++int main(int argc, char **argv)
++{
++  int exit_status = EXIT_FAILURE;
++  int i;
++  if (argc != 2)
++    {
++      print_usage();
++      exit(EXIT_FAILURE);
++    }
++
++  int fd = open(argv[1], O_RDWR);
++  if (fd < 0)
++    {
++      perror("open");
++      exit(EXIT_FAILURE);
++    }
++
++  struct stat statbuf;
++  if (fstat(fd, &statbuf) != 0)
++    {
++      perror("fstat");
++      goto close_fd;
++    }
++
++  /* this ensures file is large enough to hold ELF header */
++  if (statbuf.st_size < sizeof (ElfW(Ehdr)))
++    {
++      fprintf(stderr, "file is not large enough to hold ELF header\n");
++      goto close_fd;
++    }
++
++  void *ehdr = mmap(NULL, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
++  if (ehdr == MAP_FAILED)
++    {
++      perror("mmap");
++      goto close_fd;
++    }
++
++  if (memcmp(((ElfW(Ehdr) *) ehdr)->e_ident, ELFMAG, SELFMAG) != 0)
++    {
++      fprintf(stderr, "file is not ELF format\n");
++      goto unmap;
++    }
++
++  if (((ElfW(Ehdr) *)ehdr)->e_phentsize != sizeof(ElfW(Phdr)))
++    {
++      fprintf(stderr, "ELF header's e_phentsize mismatch ElfW(Phdr) size\n");
++      goto unmap;
++    }
++
++  unsigned int size = ((ElfW(Ehdr) *)ehdr)->e_phnum * sizeof(ElfW(Phdr));
++  if (size == 0 || size > ELF_MIN_ALIGN)
++    {
++      fprintf(stderr, "The program header table size specified by ELF header is too large\n");
++      goto unmap;
++    }
++
++  void *ephdr_s = ehdr + ((ElfW(Ehdr) *)ehdr)->e_phoff;
++  void *ephdr_e = ehdr + ((ElfW(Ehdr) *)ehdr)->e_phoff + size;
++
++  if (check_ptr(ephdr_s, ehdr, statbuf.st_size) ||
++        check_ptr(ephdr_e, ehdr, statbuf.st_size))
++    {
++      fprintf(stderr, "ELF porgram header table is not fully mmaped\n");
++      goto unmap;
++    }
++
++  ElfW(Phdr) *phdr = (ElfW(Phdr) *)ephdr_s;
++  /*
++   * mark the first PT_LOAD segment hugepage flag
++   * Here, mark hugepage flag in ELF header e_ident padding bytes won't work.
++   * elf/dl-load.c open_verify will check if shared object ELF header e_ident
++   * padding bytes match expected[EI_NIDENT] byte array which padding bytes
++   * should be zero. If it mismatches, ls.so will exit abnormally
++   */
++  for (i = 0; i < ((ElfW(Ehdr) *)ehdr)->e_phnum; i++)
++    {
++      if (phdr[i].p_type != PT_LOAD)
++        continue;
++      phdr[i].p_flags |= PF_HUGEPAGE;
++      break;
++    }
++  exit_status = EXIT_SUCCESS;
++
++unmap:
++  munmap(ehdr, statbuf.st_size);
++
++close_fd:
++  close(fd);
++
++  exit(exit_status);
++}
+diff --git a/elf/rtld.c b/elf/rtld.c
+index 4abc6dd4d1a0..83613345e81d 100644
+--- a/elf/rtld.c
++++ b/elf/rtld.c
+@@ -2454,6 +2454,34 @@ process_dl_audit (char *str)
+ 	  }
+       }
+ }
++
++#if HUGEPAGE_SHARED_LIB
++/* prase the hugepage use strategy of loading shared object */
++static void
++process_dl_huegepage (const char *dl_hugepage)
++{
++  static const struct
++  {
++    int option;
++    int flag;
++  } hpopts[] =
++    {
++      {DL_HUGEPAGE_LARGE_IN, DL_HUGEPAGE_LIB_LARGE_IN_FLAG},
++    };
++#define nhpopts (sizeof (hpopts) / sizeof (hpopts[0]))
++
++  if (dl_hugepage == NULL)
++    return;
++
++  for (size_t cnt = 0; cnt < nhpopts; ++cnt)
++    if (_dl_strtoul (dl_hugepage, NULL) == hpopts[cnt].option)
++      {
++        GLRO(dl_debug_mask) |= hpopts[cnt].flag;
++        break;
++      }
++}
++#endif
++
+ 
+ /* Process all environments variables the dynamic linker must recognize.
+    Since all of them start with `LD_' we are a bit smarter while finding
+@@ -2579,7 +2607,13 @@ process_envvars (enum mode *modep)
+ 	  if (!__libc_enable_secure
+ 	      && memcmp (envline, "DYNAMIC_WEAK", 12) == 0)
+ 	    GLRO(dl_dynamic_weak) = 1;
+-	  break;
++
++#if HUGEPAGE_SHARED_LIB
++	  if (memcmp (envline, "HUGEPAGE_LIB", 12) == 0)
++      process_dl_huegepage(&envline[13]);
++#endif
++
++    break;
+ 
+ 	case 13:
+ 	  /* We might have some extra environment variable with length 13
+@@ -2601,6 +2635,13 @@ process_envvars (enum mode *modep)
+ 	      && memcmp (envline, "PROFILE_OUTPUT", 14) == 0
+ 	      && envline[15] != '\0')
+ 	    GLRO(dl_profile_output) = &envline[15];
++
++#if HUGEPAGE_SHARED_LIB
++	  if (memcmp (envline, "HUGEPAGE_PROBE", 14) == 0 &&
++        envline[15] != '\0')
++      GLRO(dl_debug_mask) |= DL_HUGEPAGE_PROBE_FLAG;
++#endif
++
+ 	  break;
+ 
+ 	case 16:
+@@ -2630,6 +2671,17 @@ process_envvars (enum mode *modep)
+ 	}
+     }
+ 
++#if HUGEPAGE_SHARED_LIB
++  /* LIB_HUGEPAGE_LIB and HUGEPAGE_PROBE are both set. use LIB_HUGEPAGE_LIB */
++  if ((GLRO(dl_debug_mask) & DL_HUGEPAGE_PROBE_FLAG) &&
++      (GLRO(dl_debug_mask) & DL_HUGEPAGE_LIB_LARGE_IN_FLAG))
++    {
++      GLRO(dl_debug_mask) &= ~DL_HUGEPAGE_PROBE_FLAG;
++    }
++  /* unsetenv LD_HUGEPAGE_LIB, child process should not get this env */
++  unsetenv("LD_HUGEPAGE_LIB");
++#endif
++
+   /* The caller wants this information.  */
+   *modep = mode;
+ 
+diff --git a/sysdeps/generic/ldsodefs.h b/sysdeps/generic/ldsodefs.h
+index 4e95659383be..b2e428e0b62f 100644
+--- a/sysdeps/generic/ldsodefs.h
++++ b/sysdeps/generic/ldsodefs.h
+@@ -494,7 +494,11 @@ struct rtld_global_ro
+ /* These two are used only internally.  */
+ #define DL_DEBUG_HELP       (1 << 10)
+ #define DL_DEBUG_PRELINK    (1 << 11)
+-
++#if HUGEPAGE_SHARED_LIB
++#define DL_HUGEPAGE_PROBE_FLAG  (1 << 31)
++#define DL_HUGEPAGE_LIB_LARGE_IN_FLAG  (1 << 30)
++#define DL_HUGEPAGE_LARGE_IN 1
++#endif
+   /* OS version.  */
+   EXTERN unsigned int _dl_osversion;
+   /* Platform name.  */
+-- 
+2.18.4
+
