@@ -1,0 +1,362 @@
+From 7606c229560f0f3d94933fe88b521e6690e07795 Mon Sep 17 00:00:00 2001
+From: Liu Zixian <liuzixian4@huawei.com>
+Date: Fri, 17 Sep 2021 15:15:36 +0000
+Subject: [PATCH 3/4] add support for hugepages in load_elf_binary
+
+Signed-off-by: Liu Zixian <liuzixian4@huawei.com>
+---
+ fs/binfmt_elf.c          | 184 ++++++++++++++++++++++++++++++++++++++-
+ fs/exec.c                |  33 +++++++
+ include/linux/binfmts.h  |  14 +++
+ include/uapi/linux/elf.h |   6 ++
+ 4 files changed, 234 insertions(+), 3 deletions(-)
+
+diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
+index 0cedec770..d76d410a5 100644
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -138,6 +138,156 @@ static int padzero(unsigned long elf_bss)
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++#include <linux/hugetlb.h>
++
++#define ELF_MIN_HALIGN   HPAGE_SIZE
++#define ELF_HPAGESTART(_v) ((_v) & ~(unsigned long)(ELF_MIN_HALIGN-1))
++#define ELF_HPAGEOFFSET(_v) ((_v) & (ELF_MIN_HALIGN-1))
++#define ELF_HPAGEALIGN(_v) (((_v) + ELF_MIN_HALIGN - 1) & ~(ELF_MIN_HALIGN - 1))
++
++struct hugepage_args {
++	unsigned long relro_addr;
++	unsigned long relro_size;
++	unsigned long code_addr;
++	struct file *real_file;
++	int aligned;
++};
++
++static int hugepage_setup(struct linux_binprm *bprm, struct elf_phdr *eppnt,
++		int elf_phnum, struct hugepage_args *args)
++{
++	int i;
++	int probe = bprm->interp_flags & BINPRM_FLAGS_HUGEPAGES_PROBE;
++	int use_hugepage = bprm->interp_flags & BINPRM_FLAGS_HUGEPAGES_ELF;
++	int hugepage_marked = 0;
++
++	if (!probe && !use_hugepage)
++		return 0;
++	memset(args, 0, sizeof(*args));
++	args->real_file = bprm->file;
++	args->aligned = 1;
++	for (i = 0; i < elf_phnum; ++eppnt, ++i)
++		if (eppnt->p_type == PT_GNU_RELRO) {
++			args->relro_addr = eppnt->p_vaddr;
++			args->relro_size = eppnt->p_memsz;
++			if ((args->relro_addr + args->relro_size) % HPAGE_SIZE != 0)
++				args->aligned = 0;
++		} else if (eppnt->p_type == PT_LOAD) {
++			if (eppnt->p_align != HPAGE_SIZE)
++				args->aligned = 0;
++			if (eppnt->p_flags & PF_X)
++				args->code_addr = eppnt->p_vaddr;
++			if (eppnt->p_flags & PF_HUGEPAGE)
++				hugepage_marked = 1;
++		}
++	if (probe && hugepage_marked)
++		use_hugepage = 1;
++	return use_hugepage;
++}
++
++static int hugepage_set_brk(unsigned long start, unsigned long end, int prot)
++{
++	int flags = MAP_PRIVATE | MAP_FIXED_NOREPLACE | MAP_NORESERVE;
++	unsigned long map_addr;
++
++	start = ELF_HPAGEALIGN(start);
++	end = ELF_HPAGEALIGN(end);
++	if (end > start) {
++		map_addr = vm_mmap_hugepage(NULL, start, end - start, prot, flags, 0);
++		if (BAD_ADDR(map_addr))
++			return -ENOMEM;
++	}
++	current->mm->start_brk = current->mm->brk = end;
++
++	return 0;
++}
++
++static unsigned long hugepage_get_addr(struct hugepage_args *h_args,
++		unsigned long load_bias, unsigned long total_size)
++{
++	unsigned long code_addr, map_addr, size_before, size_after;
++	int flags = MAP_PRIVATE | MAP_NORESERVE;
++
++	code_addr = ELF_HPAGEALIGN(load_bias + h_args->code_addr);
++	size_before = ELF_HPAGEALIGN(h_args->code_addr);
++	size_after = ELF_HPAGEALIGN(total_size - h_args->code_addr);
++	total_size = size_before + size_after;
++	map_addr = code_addr - size_before;
++	map_addr = vm_mmap_hugepage(NULL, map_addr, total_size, PROT_NONE, flags, 0);
++	if (BAD_ADDR(map_addr))
++		return load_bias;
++	vm_munmap(map_addr, total_size);
++	map_addr += size_before - code_addr;
++	h_args->relro_addr += map_addr;
++	return map_addr;
++}
++
++static unsigned long hugepage_map(struct hugepage_args *h_args,
++		unsigned long map_addr, struct elf_phdr *eppnt,
++		int prot, int flags)
++{
++	unsigned long map_end = map_addr + eppnt->p_filesz;
++	unsigned long map_off = eppnt->p_offset;
++	unsigned long h_addr = ELF_HPAGEALIGN(map_addr);
++	unsigned long h_end = h_args->aligned ?
++		ELF_HPAGEALIGN(map_end) : ELF_HPAGESTART(map_end);
++	unsigned long size, error;
++
++	flags |= MAP_NORESERVE | MAP_FIXED_NOREPLACE;
++
++	if (map_addr == h_args->relro_addr) {
++		map_off -= ELF_PAGEOFFSET(map_addr);
++		map_addr = ELF_PAGESTART(map_addr);
++		size = h_args->relro_size + ELF_PAGEOFFSET(map_addr);
++		size = ELF_PAGEALIGN(size);
++		error = vm_mmap(h_args->real_file, map_addr, size,
++				prot, flags, map_off);
++		if (BAD_ADDR(error))
++			return error;
++		map_addr += size;
++		map_off += size;
++		h_addr = ELF_HPAGEALIGN(map_addr);
++	}
++
++	/* first part: 4K pages before h_addr */
++	if (!h_args->aligned && h_addr > map_addr) {
++		size = h_addr - map_addr;
++		error = vm_mmap(h_args->real_file, map_addr, size,
++				prot, flags, map_off);
++		if (BAD_ADDR(error))
++			return error;
++		map_off += size;
++	}
++
++	/* second part: map hugepage and zero [map_end, h_end)  */
++	if (h_args->aligned || map_end - h_addr >= HPAGE_SIZE) {
++		size = h_end - h_addr;
++		error = vm_mmap_hugepage(h_args->real_file, h_addr, size,
++				prot, flags, map_off);
++		if (BAD_ADDR(error))
++			return error;
++		map_off += size;
++		if (h_args->aligned && eppnt->p_memsz > eppnt->p_filesz) {
++			size = HPAGE_SIZE - ELF_HPAGEOFFSET(map_end);
++			if (clear_user((void __user *) map_end, size)) {
++			}
++		}
++	}
++
++	/* third part: tail in probe mode */
++	if (!h_args->aligned && map_end > h_end) {
++		size = map_end - h_end;
++		error = vm_mmap(h_args->real_file, h_end, size,
++				prot, flags, map_off);
++		if (BAD_ADDR(map_addr))
++			return map_addr;
++	}
++
++	return map_addr;
++}
++#endif
++
+ /* Let's use some macros to make this stack manipulation a little clearer */
+ #ifdef CONFIG_STACK_GROWSUP
+ #define STACK_ADD(sp, items) ((elf_addr_t __user *)(sp) + (items))
+@@ -731,6 +881,10 @@ static int load_elf_binary(struct linux_binprm *bprm)
+ 	} *loc;
+ 	struct arch_elf_state arch_state = INIT_ARCH_ELF_STATE;
+ 	loff_t pos;
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++	int use_hugepage = 0;
++	struct hugepage_args h_args;
++#endif
+ 
+ 	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
+ 	if (!loc) {
+@@ -912,6 +1066,10 @@ static int load_elf_binary(struct linux_binprm *bprm)
+ 	
+ 	current->mm->start_stack = bprm->p;
+ 
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++	use_hugepage = hugepage_setup(bprm, elf_phdata, loc->elf_ex.e_phnum,
++			&h_args);
++#endif
+ 	/* Now we do a little grungy work by mmapping the ELF image into
+ 	   the correct location in memory. */
+ 	for(i = 0, elf_ppnt = elf_phdata;
+@@ -1031,10 +1189,21 @@ static int load_elf_binary(struct linux_binprm *bprm)
+ 				retval = -EINVAL;
+ 				goto out_free_dentry;
+ 			}
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++			if (use_hugepage && !h_args.aligned)
++				load_bias = hugepage_get_addr(&h_args,
++						load_bias, total_size);
++#endif
+ 		}
+ 
+-		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
+-				elf_prot, elf_flags, total_size);
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++		if (use_hugepage)
++			error = hugepage_map(&h_args, load_bias + vaddr, elf_ppnt,
++					elf_prot, elf_flags);
++		else
++#endif
++			error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
++					elf_prot, elf_flags, total_size);
+ 		if (BAD_ADDR(error)) {
+ 			retval = IS_ERR((void *)error) ?
+ 				PTR_ERR((void*)error) : -EINVAL;
+@@ -1050,6 +1219,10 @@ static int load_elf_binary(struct linux_binprm *bprm)
+ 				load_addr += load_bias;
+ 				reloc_func_desc = load_bias;
+ 			}
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++			if (use_hugepage)
++				h_args.relro_addr += load_bias;
++#endif
+ 		}
+ 		k = elf_ppnt->p_vaddr;
+ 		if (k < start_code)
+@@ -1098,7 +1271,12 @@ static int load_elf_binary(struct linux_binprm *bprm)
+ 	 * mapping in the interpreter, to make sure it doesn't wind
+ 	 * up getting placed where the bss needs to go.
+ 	 */
+-	retval = set_brk(elf_bss, elf_brk, bss_prot);
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++	if (use_hugepage)
++		retval = hugepage_set_brk(elf_bss, elf_brk, bss_prot);
++	else
++#endif
++		retval = set_brk(elf_bss, elf_brk, bss_prot);
+ 	if (retval)
+ 		goto out_free_dentry;
+ 	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
+diff --git a/fs/exec.c b/fs/exec.c
+index 9f97a0d1a..ae2d5ea6f 100644
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -492,6 +492,19 @@ static int count(struct user_arg_ptr argv, int max)
+ 	return i;
+ }
+ 
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++#define HUGEPAGE_PROBE "HUGEPAGE_PROBE=1"
++#define HUGEPAGE_ELF "HUGEPAGE_ELF=1"
++char env_buffer[MAX_ARG_STRLEN];
++
++static bool check_env(const char __user *env, const char *str)
++{
++	if (!strncpy_from_user(env_buffer, env, MAX_ARG_STRLEN))
++		return false;
++	return !strncmp(env_buffer, str, MAX_ARG_STRLEN);
++}
++#endif
++
+ /*
+  * 'copy_strings()' copies argument/environment strings from the old
+  * processes's memory to the new process's stack.  The call to get_user_pages()
+@@ -504,6 +517,10 @@ static int copy_strings(int argc, struct user_arg_ptr argv,
+ 	char *kaddr = NULL;
+ 	unsigned long kpos = 0;
+ 	int ret;
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++	unsigned int *flags = &bprm->interp_flags;
++	bool need_check_env = *flags & BINPRM_FLAGS_HUGEPAGES_CHECK;
++#endif
+ 
+ 	while (argc-- > 0) {
+ 		const char __user *str;
+@@ -523,6 +540,19 @@ static int copy_strings(int argc, struct user_arg_ptr argv,
+ 		if (!valid_arg_len(bprm, len))
+ 			goto out;
+ 
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++		if (need_check_env) {
++			*flags &= ~BINPRM_FLAGS_HUGEPAGES_CHECK;
++			if (len == sizeof(HUGEPAGE_PROBE) &&
++					check_env(str, HUGEPAGE_PROBE)) {
++				*flags |= BINPRM_FLAGS_HUGEPAGES_PROBE;
++			} else if (len == sizeof(HUGEPAGE_ELF) &&
++					check_env(str, HUGEPAGE_ELF)) {
++				*flags |= BINPRM_FLAGS_HUGEPAGES_ELF;
++				continue;
++			}
++		}
++#endif
+ 		/* We're going to work our way backwords. */
+ 		pos = bprm->p;
+ 		str += len;
+@@ -1808,6 +1838,9 @@ static int __do_execve_file(int fd, struct filename *filename,
+ 	if (retval < 0)
+ 		goto out;
+ 
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++	bprm->interp_flags |= BINPRM_FLAGS_HUGEPAGES_CHECK;
++#endif
+ 	bprm->exec = bprm->p;
+ 	retval = copy_strings(bprm->envc, envp, bprm);
+ 	if (retval < 0)
+diff --git a/include/linux/binfmts.h b/include/linux/binfmts.h
+index 158577154..4c9c0e1e5 100644
+--- a/include/linux/binfmts.h
++++ b/include/linux/binfmts.h
+@@ -76,6 +76,20 @@ struct linux_binprm {
+ #define BINPRM_FLAGS_PATH_INACCESSIBLE_BIT 2
+ #define BINPRM_FLAGS_PATH_INACCESSIBLE (1 << BINPRM_FLAGS_PATH_INACCESSIBLE_BIT)
+ 
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++/* 2MB aligned ELF binary will be mapped with hugepages */
++#define BINPRM_FLAGS_HUGEPAGES_PROBE_BIT 3
++#define BINPRM_FLAGS_HUGEPAGES_PROBE (1 << BINPRM_FLAGS_HUGEPAGES_PROBE_BIT)
++
++/* ELF binary will be mapped with hugepages */
++#define BINPRM_FLAGS_HUGEPAGES_ELF_BIT 4
++#define BINPRM_FLAGS_HUGEPAGES_ELF (1 << BINPRM_FLAGS_HUGEPAGES_ELF_BIT)
++
++/* Will check for HUGEPAGES_ELF/PROBE */
++#define BINPRM_FLAGS_HUGEPAGES_CHECK_BIT 5
++#define BINPRM_FLAGS_HUGEPAGES_CHECK (1 << BINPRM_FLAGS_HUGEPAGES_CHECK_BIT)
++#endif
++
+ /* Function parameter for binfmt->coredump */
+ struct coredump_params {
+ 	RH_KABI_REPLACE(const siginfo_t *siginfo,
+diff --git a/include/uapi/linux/elf.h b/include/uapi/linux/elf.h
+index 4e12c423b..e936a8a60 100644
+--- a/include/uapi/linux/elf.h
++++ b/include/uapi/linux/elf.h
+@@ -38,6 +38,9 @@ typedef __s64	Elf64_Sxword;
+ #define PT_GNU_EH_FRAME		0x6474e550
+ 
+ #define PT_GNU_STACK	(PT_LOOS + 0x474e551)
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++#define PT_GNU_RELRO   (PT_LOOS + 0x474e552)
++#endif
+ 
+ /*
+  * Extended Numbering
+@@ -240,6 +243,9 @@ typedef struct elf64_hdr {
+ #define PF_R		0x4
+ #define PF_W		0x2
+ #define PF_X		0x1
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++#define PF_HUGEPAGE    0x01000000
++#endif
+ 
+ typedef struct elf32_phdr{
+   Elf32_Word	p_type;
+-- 
+2.27.0
+
