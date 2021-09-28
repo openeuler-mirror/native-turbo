@@ -1,0 +1,336 @@
+From 396b218da7c2d61fa71a6659785576a344738ead Mon Sep 17 00:00:00 2001
+From: Liu Zixian <liuzixian4@huawei.com>
+Date: Fri, 17 Sep 2021 15:14:47 +0000
+Subject: [PATCH 2/4] add fallback support for exec_hugepages
+
+Signed-off-by: Liu Zixian <liuzixian4@huawei.com>
+---
+ include/linux/mm.h |   4 ++
+ mm/hugetlb.c       |  72 ++++++++++++++++++++++++-
+ mm/memory.c        | 127 +++++++++++++++++++++++++++++++++++++++++++--
+ 3 files changed, 198 insertions(+), 5 deletions(-)
+
+diff --git a/include/linux/mm.h b/include/linux/mm.h
+index adb17657b..50b9083ad 100644
+--- a/include/linux/mm.h
++++ b/include/linux/mm.h
+@@ -2403,6 +2403,10 @@ extern unsigned long __must_check vm_mmap_hugepage(struct file *, unsigned long,
+         unsigned long, unsigned long,
+         unsigned long, unsigned long);
+ extern void read_real_file(struct page *page, struct vm_area_struct *vma, loff_t *off);
++extern bool pmd_is_huge_or_none(struct mm_struct *mm, unsigned long addr);
++extern vm_fault_t fallback_normal_page(struct vm_area_struct *vma,
++		unsigned long haddr, unsigned int flags,
++		struct page *cow_page, loff_t *file_off);
+ #endif
+ 
+ struct vm_unmapped_area_info {
+diff --git a/mm/hugetlb.c b/mm/hugetlb.c
+index 32bc08737..c4d70d084 100644
+--- a/mm/hugetlb.c
++++ b/mm/hugetlb.c
+@@ -4653,6 +4653,24 @@ static void unmap_ref_private(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	i_mmap_unlock_write(mapping);
+ }
+ 
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++/*
++ * exec_hugepages is not the only user of alloc_huge_page,
++ * so we don't merge alloc_fallback_page into it.
++ */
++static struct page *alloc_fallback_page(struct vm_area_struct *vma,
++		unsigned long addr)
++{
++	gfp_t gfp = GFP_HIGHUSER_MOVABLE | __GFP_COMP | __GFP_NOWARN;
++	struct page *page;
++
++	page = alloc_pages_vma(gfp, HPAGE_PMD_ORDER, vma,
++			addr, numa_node_id(), true);
++
++	return page ? page : ERR_PTR(-ENOSPC);
++}
++#endif
++
+ /*
+  * Hugetlb_cow() should be called with page lock of the original hugepage held.
+  * Called with hugetlb_instantiation_mutex held and pte_page locked so we
+@@ -4669,6 +4687,9 @@ static int hugetlb_cow(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	int ret = 0, outside_reserve = 0;
+ 	unsigned long mmun_start;	/* For mmu_notifiers */
+ 	unsigned long mmun_end;		/* For mmu_notifiers */
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++	bool page_is_fallback = false;
++#endif
+ 
+ 	pte = huge_ptep_get(ptep);
+ 	old_page = pte_page(pte);
+@@ -4704,6 +4725,19 @@ static int hugetlb_cow(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	spin_unlock(ptl);
+ 	new_page = alloc_huge_page(vma, address, outside_reserve);
+ 
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++	if (IS_ERR(new_page) && is_vm_exec_hugepages(vma)) {
++		page_is_fallback = true;
++		new_page = alloc_fallback_page(vma, address);
++		if (IS_ERR(new_page)) {
++			hugetlb_count_sub(pages_per_huge_page(hstate_vma(vma)), mm);
++			page_remove_rmap(old_page, true);
++			ret = fallback_normal_page(vma, address, FAULT_FLAG_WRITE, old_page, NULL);
++			goto out_release_old;
++		}
++	}
++#endif
++
+ 	if (IS_ERR(new_page)) {
+ 		/*
+ 		 * If a process owning a MAP_PRIVATE mapping fails to COW,
+@@ -4769,7 +4803,10 @@ static int hugetlb_cow(struct mm_struct *mm, struct vm_area_struct *vma,
+ 				make_huge_pte(vma, new_page, 1));
+ 		page_remove_rmap(old_page, true);
+ 		hugepage_add_new_anon_rmap(new_page, vma, address);
+-		set_page_huge_active(new_page);
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++		if (!page_is_fallback)
++#endif
++			set_page_huge_active(new_page);
+ 		/* Make the old page be freed below */
+ 		new_page = old_page;
+ 	}
+@@ -4855,6 +4892,7 @@ static int hugetlb_no_page(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	unsigned long haddr = address & huge_page_mask(h);
+ 	bool new_page = false;
+ #ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++	bool page_is_fallback = false;
+ 	loff_t off = haddr - vma->vm_start + (vma->vm_pgoff << PAGE_SHIFT);
+ #endif
+ 
+@@ -4911,6 +4949,18 @@ static int hugetlb_no_page(struct mm_struct *mm, struct vm_area_struct *vma,
+ 		}
+ 
+ 		page = alloc_huge_page(vma, haddr, 0);
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++		if (PTR_ERR(page) == -ENOSPC && is_vm_exec_hugepages(vma)) {
++			page_is_fallback = true;
++			page = alloc_fallback_page(vma, address);
++			if (IS_ERR(page)) {
++				loff_t *poff = vma->vm_real_file ? &off : NULL;
++
++				ret = fallback_normal_page(vma, haddr, flags, NULL, poff);
++				goto out;
++			}
++		}
++#endif
+ 		if (IS_ERR(page)) {
+ 			ret = PTR_ERR(page);
+ 			if (ret == -ENOMEM)
+@@ -4988,7 +5038,10 @@ static int hugetlb_no_page(struct mm_struct *mm, struct vm_area_struct *vma,
+ 				&& (vma->vm_flags & VM_SHARED)));
+ 	set_huge_pte_at(mm, haddr, ptep, new_pte);
+ 
+-	hugetlb_count_add(pages_per_huge_page(h), mm);
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++	if (!page_is_fallback)
++#endif
++		hugetlb_count_add(pages_per_huge_page(h), mm);
+ 	if ((flags & FAULT_FLAG_WRITE) && !(vma->vm_flags & VM_SHARED)) {
+ 		/* Optimization, do the COW without a second fault */
+ 		ret = hugetlb_cow(mm, vma, haddr, ptep, page, ptl);
+@@ -5001,7 +5054,11 @@ static int hugetlb_no_page(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	 * in the pagecache could be !page_huge_active() if they have been
+ 	 * isolated for migration.
+ 	 */
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++	if (new_page && !page_is_fallback)
++#else
+ 	if (new_page)
++#endif
+ 		set_page_huge_active(page);
+ 
+ 	unlock_page(page);
+@@ -5058,6 +5115,17 @@ int hugetlb_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	int need_wait_lock = 0;
+ 	unsigned long haddr = address & huge_page_mask(h);
+ 
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++	mapping = vma->vm_file->f_mapping;
++	idx = vma_hugecache_offset(h, vma, haddr);
++	hash = hugetlb_fault_mutex_hash(h, mapping, idx, haddr);
++	mutex_lock(&hugetlb_fault_mutex_table[hash]);
++	if (!pmd_is_huge_or_none(mm, haddr)) {
++		ret = VM_FAULT_SIGBUS;
++		goto out_mutex;
++	}
++	mutex_unlock(&hugetlb_fault_mutex_table[hash]);
++#endif
+ 	ptep = huge_pte_offset(mm, haddr, huge_page_size(h));
+ 	if (ptep) {
+ 		entry = huge_ptep_get(ptep);
+diff --git a/mm/memory.c b/mm/memory.c
+index d3b27fbd8..62c731919 100644
+--- a/mm/memory.c
++++ b/mm/memory.c
+@@ -1283,8 +1283,17 @@ int copy_page_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
+ 			!vma->anon_vma)
+ 		return 0;
+ 
+-	if (is_vm_hugetlb_page(vma))
+-		return copy_hugetlb_page_range(dst_mm, src_mm, vma);
++	/*
++	 * hugetlb will ignore 4k pages and copy_pmd_range will ignore
++	 * anonymous hugepages
++	 */
++	if (is_vm_hugetlb_page(vma)) {
++		ret = copy_hugetlb_page_range(dst_mm, src_mm, vma);
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++		if (ret || !is_vm_exec_hugepages(vma))
++#endif
++			return ret;
++	}
+ 
+ 	if (unlikely(vma->vm_flags & VM_PFNMAP)) {
+ 		/*
+@@ -3417,6 +3426,9 @@ static int do_anonymous_page(struct vm_fault *vmf)
+ 
+ 	/* Use the zero-page for reads */
+ 	if (!(vmf->flags & FAULT_FLAG_WRITE) &&
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++			!is_vm_exec_hugepages(vma) &&
++#endif
+ 			!mm_forbids_zeropage(vma->vm_mm)) {
+ 		entry = pte_mkspecial(pfn_pte(my_zero_pfn(vmf->address),
+ 						vma->vm_page_prot));
+@@ -4285,7 +4297,10 @@ static int handle_pte_fault(struct vm_fault *vmf)
+ 	} else {
+ 		/* See comment in pte_alloc_one_map() */
+ 		if (pmd_devmap_trans_unstable(vmf->pmd))
+-			return 0;
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++			if (!is_vm_exec_hugepages(vmf->vma))
++#endif
++				return 0;
+ 		/*
+ 		 * A regular pmd is established and it can't morph into a huge
+ 		 * pmd from under us anymore at this point because we hold the
+@@ -4441,6 +4456,107 @@ static int __handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
+ 	return handle_pte_fault(&vmf);
+ }
+ 
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++static pmd_t *get_pmd(struct mm_struct *mm, unsigned long addr)
++{
++	pgd_t *pgd;
++	p4d_t *p4d;
++	pud_t *pud;
++	pmd_t *pmd;
++
++	pgd = pgd_offset(mm, addr);
++	if (pgd_none(*pgd))
++		return NULL;
++	p4d = p4d_offset(pgd, addr);
++	if (p4d_none(*p4d))
++		return NULL;
++	pud = pud_offset(p4d, addr);
++	if (pud_none(*pud))
++		return NULL;
++	pmd = pmd_offset(pud, addr);
++	if (pmd_none(*pmd))
++		return NULL;
++	return pmd;
++}
++
++bool pmd_is_huge_or_none(struct mm_struct *mm, unsigned long addr)
++{
++	pmd_t *pmd = get_pmd(mm, addr);
++
++	return !pmd || pmd_none(*pmd) || pmd_huge(*pmd);
++}
++
++static vm_fault_t handle_mm_fault_hpage_size(struct vm_area_struct *vma,
++		unsigned long addr, unsigned int flags)
++{
++	vm_fault_t ret = 0;
++	unsigned long offset = 0;
++
++	addr &= ~(HPAGE_SIZE - 1);
++	for (offset = 0; offset < HPAGE_SIZE; offset += PAGE_SIZE) {
++		ret = __handle_mm_fault(vma, addr + offset, flags);
++		if (ret & VM_FAULT_ERROR)
++			return ret;
++	}
++	return ret;
++}
++
++vm_fault_t fallback_normal_page(struct vm_area_struct *vma,
++		unsigned long haddr, unsigned int flags,
++		struct page *cow_page, loff_t *file_off)
++{
++	vm_fault_t ret;
++	pmd_t *pmd;
++	unsigned long addr_off;
++	void *src_addr;
++
++	pr_info("exec_hugepages: pagefault fallback to 4K pages\n"
++			"\t\tpid %d, haddr %lx, comm %s\n",
++			current->pid, haddr, current->comm);
++	ret = handle_mm_fault_hpage_size(vma, haddr, flags);
++	if (ret & VM_FAULT_ERROR)
++		return ret;
++	if (!cow_page && !file_off)
++		return 0;
++	pmd = get_pmd(vma->vm_mm, haddr);
++	if (cow_page)
++		src_addr = kmap(cow_page);
++	for (addr_off = 0; addr_off < HPAGE_SIZE; addr_off += PAGE_SIZE) {
++		struct page *new_page;
++		void *dst_addr;
++		pte_t *pte;
++
++		pte = pte_offset_map(pmd, haddr + addr_off);
++		new_page = pte_page(*pte);
++		if (cow_page) {
++			dst_addr = kmap(new_page);
++			memcpy(dst_addr, src_addr + addr_off, PAGE_SIZE);
++			kunmap(new_page);
++		} else if (file_off) {
++			read_real_file(new_page, vma, file_off);
++		}
++		pte_unmap(pte);
++	}
++	if (cow_page)
++		kunmap(cow_page);
++	return 0;
++}
++
++static vm_fault_t exec_hugepages_fault(struct vm_area_struct *vma,
++		unsigned long addr, unsigned int flags)
++{
++	vm_fault_t ret = VM_FAULT_SIGBUS;
++	struct mm_struct *mm = vma->vm_mm;
++
++	if (pmd_is_huge_or_none(mm, addr))
++		ret = hugetlb_fault(mm, vma, addr, flags);
++	if (ret == VM_FAULT_SIGBUS)
++		ret = handle_mm_fault_hpage_size(vma, addr, flags);
++
++	return ret;
++}
++#endif
++
+ /*
+  * By the time we get here, we already hold the mm semaphore
+  *
+@@ -4472,6 +4588,11 @@ int handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
+ 	if (flags & FAULT_FLAG_USER)
+ 		mem_cgroup_enter_user_fault();
+ 
++#ifdef CONFIG_EULEROS_EXEC_HUGEPAGES
++	if (unlikely(is_vm_exec_hugepages(vma)))
++		ret = exec_hugepages_fault(vma, address, flags);
++	else
++#endif
+ 	if (unlikely(is_vm_hugetlb_page(vma)))
+ 		ret = hugetlb_fault(vma->vm_mm, vma, address, flags);
+ 	else
+-- 
+2.27.0
+
