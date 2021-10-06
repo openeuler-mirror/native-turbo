@@ -1,38 +1,54 @@
 # native-turbo
 
 #### 介绍
-Native-Turbo is the performance optimization framework of native microarchitecture of operating system.
+Native-Turbo 是操作系统原生性能加速框架; 通过微架构优化和软硬件协同等技术, 提升大型应用性能;
+
+
 
 #### 软件架构
-软件架构说明
-1. glibc动态加载器ld.so加载动态库支持将动态库映射到大页内存区间从而降低TLB cache miss以提升性能
+
+![](doc/img/Native-Turbo-stack.svg)
+
+A-tune作为智能中心管理OS性能策略;
+wisdom接收A-tune策略, 执行调度算法;
+Native-Turbo提供操作系统各层级软件的性能优化机制, A-tune进行智能管理;
+
+
+
+Native-Turbo包含微架构优化技术, 基础库优化, 系统调用优化, 中断聚合, 软硬件协同等技术;
+
+
+
+微架构优化技术
+
+动态库拼接
+通过ld加载阶段将分散的动态库的代码段数据段拼接聚合，然后使用大页内存提升iTLB命中率。
+
+exec原生大页
+用户态大页机制需要应用修改配置和重编译，exec原生大页机制直接在内核加载ELF文件阶段使用大页内存，对APP透明。
+
+消除PLT跳转
+应用代码调用动态库函数的流程，需要先跳转PLT表，然后跳转真实函数，消除PLT跳转能提升IPC。
+
+热点Section在线重排
+默认情况下代码段是按动态库粒度排布的，通过在线重排技术可以实现热点代码按Section粒度重排。
+
+
 
 #### 构建/安装教程
 
-1. apply patch：glibc-patch目录中有针对openEuler SP1版本glibc的补丁，合入特性补丁代码
-	如果内核未支持定制化的mmap，0002-elf-ld.so-use-special-mmap-for-hugepage-to-get-symbo.patch无需合入
-2. 构建：在glibc源码目录的同层级目录下执行如下命令：
-	mkdir build && cd build && ../glibc-2.28/configure --prefix=/usr --enable-static-pie --enable-hugepage-shared-library && make -j
+请参考doc目录下各特性说明文档;
+
+
 
 #### 使用说明
 
-1.  若需使用新编译的ld.so加载测试程序的动态库，在编译可执行程序的时候需要通过-Wl,--dyanmic-linker指定新编ld.so的位置
-2.  对于要使用大页的动态库（libA.so为例），构建完成之后，使用hugepageedit标记动态库：./hugepageedit libA.so
-3.  设置环境变量HUGEPAGE_PROBE非空，启动可执行程序，ld.so加载被hugepageedit标记的动态库会使用大页
+请参考doc目录下各特性说明文档;
+
+
 
 #### 参与贡献
 
-1.  Fork 本仓库
-2.  新建 Feat_xxx 分支
-3.  提交代码
-4.  新建 Pull Request
+1.  发现BUG或者有新需求请提issue;  https://gitee.com/openeuler/native-turbo/issues
+2.  修复BUG或者新特性的补丁请通过Pull Request提交; 
 
-
-#### 特技
-
-1.  使用 Readme\_XXX.md 来支持不同的语言，例如 Readme\_en.md, Readme\_zh.md
-2.  Gitee 官方博客 [blog.gitee.com](https://blog.gitee.com)
-3.  你可以 [https://gitee.com/explore](https://gitee.com/explore) 这个地址来了解 Gitee 上的优秀开源项目
-4.  [GVP](https://gitee.com/gvp) 全称是 Gitee 最有价值开源项目，是综合评定出的优秀开源项目
-5.  Gitee 官方提供的使用手册 [https://gitee.com/help](https://gitee.com/help)
-6.  Gitee 封面人物是一档用来展示 Gitee 会员风采的栏目 [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
