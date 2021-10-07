@@ -1,0 +1,8 @@
+~*
+*.o
+*.elf
+*.asm
+*.ro
+*.old
+relocation
+test_rela
