@@ -1,0 +1,1179 @@
+From 4b8574cc0b0c797f4c3c7ec4f714bf1366899359 Mon Sep 17 00:00:00 2001
+From: Lv Ying <lvying6@huawei.com>
+Date: Fri, 17 Sep 2021 23:36:40 +0800
+Subject: [PATCH 2/3] elf/ld.so: add testcase for ld.so load shared object use
+ hugepage feature
+
+1. testcase for hugepageedit
+2. testcase for feature env
+3. testcase for feature fallback
+4. testcase for hugepage mmap consistency witch process occupancy
+5. testcase for dlopen use hugepage
+
+Signed-off-by: Lv Ying <lvying6@huawei.com>
+---
+ config.make.in                    |   1 +
+ configure                         |  24 ++++++-
+ configure.ac                      |   3 +
+ elf/Makefile                      |  61 +++++++++++++++++
+ elf/hugepageedit.c                |  69 +++----------------
+ elf/tst-check-hugepage.sh         |  72 ++++++++++++++++++++
+ elf/tst-dl-hugepage.sh            |  70 +++++++++++++++++++
+ elf/tst-dl-use-hugepage.c         |  54 +++++++++++++++
+ elf/tst-get-ephdr.h               |  96 ++++++++++++++++++++++++++
+ elf/tst-hugepageedit1.sh          |  85 +++++++++++++++++++++++
+ elf/tst-ld-hugepage-env.sh        | 108 ++++++++++++++++++++++++++++++
+ elf/tst-ld-hugepage-fallback.sh   |  66 ++++++++++++++++++
+ elf/tst-ld-hugepage-mmap-smaps.sh |  49 ++++++++++++++
+ elf/tst-ld-hugepage.h             |   7 ++
+ elf/tst-ld-hugepagemod.c          |  19 ++++++
+ elf/tst-update-ehdr.c             |  58 ++++++++++++++++
+ elf/tst-update-phdr.c             |  93 +++++++++++++++++++++++++
+ elf/tst-use-hugepage.c            |  15 +++++
+ 18 files changed, 889 insertions(+), 61 deletions(-)
+ create mode 100644 elf/tst-check-hugepage.sh
+ create mode 100644 elf/tst-dl-hugepage.sh
+ create mode 100644 elf/tst-dl-use-hugepage.c
+ create mode 100644 elf/tst-get-ephdr.h
+ create mode 100644 elf/tst-hugepageedit1.sh
+ create mode 100644 elf/tst-ld-hugepage-env.sh
+ create mode 100644 elf/tst-ld-hugepage-fallback.sh
+ create mode 100644 elf/tst-ld-hugepage-mmap-smaps.sh
+ create mode 100644 elf/tst-ld-hugepage.h
+ create mode 100644 elf/tst-ld-hugepagemod.c
+ create mode 100644 elf/tst-update-ehdr.c
+ create mode 100644 elf/tst-update-phdr.c
+ create mode 100644 elf/tst-use-hugepage.c
+
+diff --git a/config.make.in b/config.make.in
+index f46bfc29..e242c1c3 100644
+--- a/config.make.in
++++ b/config.make.in
+@@ -76,6 +76,7 @@ output-format = @libc_cv_output_format@
+ have-cxx-thread_local = @libc_cv_cxx_thread_local@
+ have-loop-to-function = @libc_cv_cc_loop_to_function@
+ have-textrel_ifunc = @libc_cv_textrel_ifunc@
++have-hugetlb-dir = @have_hugetlb_dir@
+ 
+ multi-arch = @multi_arch@
+ 
+diff --git a/configure b/configure
+index 4cd0b6f3..4d175e29 100755
+--- a/configure
++++ b/configure
+@@ -670,7 +670,7 @@ stack_protector
+ libc_cv_ssp
+ libc_cv_with_fp
+ base_machine
+-enable_hugepage_shared_library
++have_hugetlb_dir
+ have_tunables
+ build_pt_chown
+ build_nscd
+@@ -3803,6 +3803,28 @@ enable-hugepage-shared-library = $enable_hugepage_shared_library"
+ if test "$enable_hugepage_shared_library" = yes; then
+   $as_echo "#define HUGEPAGE_SHARED_LIB 1" >>confdefs.h
+ 
++  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for /sys/devices/system/node/node0/hugepages/hugepages-2048kB/" >&5
++$as_echo_n "checking for /sys/devices/system/node/node0/hugepages/hugepages-2048kB/... " >&6; }
++if ${ac_cv_file__sys_devices_system_node_node0_hugepages_hugepages_2048kB_+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++  test "$cross_compiling" = yes &&
++  as_fn_error $? "cannot check for file existence when cross compiling" "$LINENO" 5
++if test -r "/sys/devices/system/node/node0/hugepages/hugepages-2048kB/"; then
++  ac_cv_file__sys_devices_system_node_node0_hugepages_hugepages_2048kB_=yes
++else
++  ac_cv_file__sys_devices_system_node_node0_hugepages_hugepages_2048kB_=no
++fi
++fi
++{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_file__sys_devices_system_node_node0_hugepages_hugepages_2048kB_" >&5
++$as_echo "$ac_cv_file__sys_devices_system_node_node0_hugepages_hugepages_2048kB_" >&6; }
++if test "x$ac_cv_file__sys_devices_system_node_node0_hugepages_hugepages_2048kB_" = xyes; then :
++  have_hugetlb_dir=yes
++else
++  have_hugetlb_dir=no
++fi
++
++
+ fi
+ 
+ # We keep the original values in `$config_*' and never modify them, so we
+diff --git a/configure.ac b/configure.ac
+index daac135b..6f3a6bda 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -487,6 +487,9 @@ AC_ARG_ENABLE([hugepage-shared-library],
+ LIBC_CONFIG_VAR([enable-hugepage-shared-library], [$enable_hugepage_shared_library])
+ if test "$enable_hugepage_shared_library" = yes; then
+   AC_DEFINE(HUGEPAGE_SHARED_LIB)
++  AC_CHECK_FILE(/sys/devices/system/node/node0/hugepages/hugepages-2048kB/,
++  have_hugetlb_dir=yes, have_hugetlb_dir=no)
++  AC_SUBST(have_hugetlb_dir)
+ fi
+ 
+ # We keep the original values in `$config_*' and never modify them, so we
+diff --git a/elf/Makefile b/elf/Makefile
+index f19853f5..884692b4 100644
+--- a/elf/Makefile
++++ b/elf/Makefile
+@@ -123,6 +123,12 @@ others-pie += hugepageedit
+ install-bin += hugepageedit
+ 
+ $(objpfx)hugepageedit: $(objpfx)hugepageedit.o
++
++ifeq ($(run-built-tests),yes)
++tests-special += $(objpfx)tst-hugepageedit1.out $(objpfx)tst-ld-hugepage-env.out	\
++	$(objpfx)tst-ld-hugepage-fallback.out	$(objpfx)tst-ld-hugepage-mmap-smaps.out	\
++	$(objpfx)tst-dl-hugepage.out
++endif
+ endif
+ 
+ # This needs to be statically linked because it is executed at a time
+@@ -305,6 +311,13 @@ $(objpfx)tst-gnu2-tls1: $(objpfx)tst-gnu2-tls1mod.so
+ tst-gnu2-tls1mod.so-no-z-defs = yes
+ CFLAGS-tst-gnu2-tls1mod.c += -mtls-dialect=gnu2
+ endif
++ifeq (yes,$(enable-hugepage-shared-library))
++ld-hugepagemod-suffixes = 1 2 3 4 5
++ld-hugepagemod-modules = $(addprefix tst-ld-hugepagemod, $(ld-hugepagemod-suffixes))
++tst-usehugepage = $(addprefix tst-use-hugepage, $(ld-hugepagemod-suffixes))
++modules-names += $(ld-hugepagemod-modules)
++test-srcs += tst-update-ehdr tst-update-phdr tst-dl-use-hugepage $(tst-usehugepage)
++endif
+ ifeq (yes,$(have-protected-data))
+ modules-names += tst-protected1moda tst-protected1modb
+ tests += tst-protected1a tst-protected1b
+@@ -1436,6 +1449,54 @@ $(objpfx)tst-ldconfig-X.out : tst-ldconfig-X.sh $(objpfx)ldconfig
+ 		 '$(run-program-env)' > $@; \
+ 	$(evaluate-test)
+ 
++ifeq (yes,$(enable-hugepage-shared-library))
++CFLAGS-tst-ld-hugepagemod.c += -DOBJDIR=\"$(elf-objpfx)\"
++$(objpfx)tst-ld-hugepage-bin.o	:
++	dd if=/dev/zero of=$@ count=4 bs=2MB
++$(patsubst %,$(objpfx)%.os,$(ld-hugepagemod-modules)): $(objpfx)tst-ld-hugepagemod%.os: tst-ld-hugepagemod.c $(objpfx)tst-ld-hugepage-bin.o
++	$(compile-command.c) -DN=$*
++$(patsubst %,$(objpfx)%.o,$(tst-usehugepage)): $(objpfx)tst-use-hugepage%.o: tst-use-hugepage.c
++	$(compile-command.c)
++$(patsubst tst-use-hugepage%,$(objpfx)tst-use-hugepage%,$(tst-usehugepage)):	$(objpfx)tst-use-hugepage% :	\
++	$(objpfx)tst-use-hugepage%.o $(objpfx)tst-ld-hugepagemod%.so $(objpfx)ld.so
++$(objpfx)tst-dl-use-hugepage: $(libdl)
++
++ifeq ($(have-hugetlb-dir),yes)
++$(objpfx)tst-hugepageedit1.out: tst-hugepageedit1.sh tst-check-hugepage.sh	\
++	$(objpfx)tst-update-ehdr $(objpfx)tst-use-hugepage1 $(objpfx)tst-ld-hugepagemod1.so
++	$(SHELL) $< '$(common-objpfx)' '$(test-wrapper)' \
++		'$(test-wrapper-env)' $(CURDIR)/tst-check-hugepage.sh > $@; \
++	$(evaluate-test)
++
++$(objpfx)tst-ld-hugepage-env.out:	tst-ld-hugepage-env.sh tst-check-hugepage.sh	\
++	$(objpfx)tst-use-hugepage2 $(objpfx)tst-ld-hugepagemod2.so
++	$(SHELL) $< '$(common-objpfx)' '$(test-wrapper)' \
++		'$(test-wrapper-env)' $(CURDIR)/tst-check-hugepage.sh > $@; \
++	$(evaluate-test)
++
++$(objpfx)tst-ld-hugepage-fallback.out:	tst-ld-hugepage-fallback.sh tst-check-hugepage.sh	\
++	$(objpfx)tst-update-phdr $(objpfx)tst-use-hugepage3 $(objpfx)tst-ld-hugepagemod3.so
++	$(SHELL) $< '$(common-objpfx)' '$(test-wrapper)' \
++		'$(test-wrapper-env)' $(CURDIR)/tst-check-hugepage.sh > $@; \
++	$(evaluate-test)
++
++$(objpfx)tst-ld-hugepage-mmap-smaps.out:	tst-ld-hugepage-mmap-smaps.sh tst-check-hugepage.sh	\
++	$(objpfx)tst-use-hugepage4 $(objpfx)tst-ld-hugepagemod4.so
++	$(SHELL) $< '$(common-objpfx)' '$(test-wrapper)' \
++		'$(test-wrapper-env)' $(CURDIR)/tst-check-hugepage.sh > $@; \
++	$(evaluate-test)
++
++$(objpfx)tst-dl-hugepage.out:	tst-dl-hugepage.sh tst-check-hugepage.sh	\
++	$(objpfx)tst-dl-use-hugepage $(objpfx)tst-ld-hugepagemod5.so
++	$(SHELL) $< '$(common-objpfx)' '$(test-wrapper)' \
++		'$(test-wrapper-env)' $(CURDIR)/tst-check-hugepage.sh > $@; \
++	$(evaluate-test)
++else
++tests-unsupported += tst-hugepageedit1.out tst-ld-hugepage-env.out tst-ld-hugepage-fallback.out	\
++	tst-ld-hugepage-mmap-smaps.out tst-dl-hugepage.out
++endif
++endif
++
+ $(objpfx)tst-dlsym-error: $(libdl)
+ 
+ # Test static linking of all the libraries we can possibly link
+diff --git a/elf/hugepageedit.c b/elf/hugepageedit.c
+index 14a91a4b..ab4247ad 100644
+--- a/elf/hugepageedit.c
++++ b/elf/hugepageedit.c
+@@ -25,18 +25,10 @@
+ #include <sys/stat.h>
+ #include <sys/mman.h>
+ #include <sys/types.h>
++#include "tst-get-ephdr.h"
+ 
+-/* reference kernel load_elf_phdrs program header table size constraint */
+-#define ELF_MIN_ALIGN 4096
+ #define TOOL_NAME "hugepageedit"
+ 
+-int check_ptr(void *ptr, void *start, size_t len)
+-{
+-  if (ptr < start || ptr > start + len)
+-    return -1;
+-  return 0;
+-}
+-
+ void print_usage(void)
+ {
+   fprintf(stderr, "%s [-x] [-d]  <ELF file>\n"  \
+@@ -47,6 +39,7 @@ void print_usage(void)
+ 
+ int main(int argc, char *argv[])
+ {
++  size_t length;
+   int exit_status = -1;
+   int i, opt, delete = 0, exec_only = 0;
+   while ((opt = getopt(argc, argv, "dx")) != -1)
+@@ -84,57 +77,13 @@ int main(int argc, char *argv[])
+       return -1;
+     }
+ 
+-  struct stat statbuf;
+-  if (fstat(fd, &statbuf) != 0)
+-    {
+-      perror("fstat");
+-      goto close_fd;
+-    }
+-
+-  /* this ensures file is large enough to hold ELF header */
+-  if (statbuf.st_size < sizeof (ElfW(Ehdr)))
+-    {
+-      fprintf(stderr, "file is not large enough to hold ELF header\n");
+-      goto close_fd;
+-    }
+-
+-  void *ehdr = mmap(NULL, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+-  if (ehdr == MAP_FAILED)
+-    {
+-      perror("mmap");
+-      goto close_fd;
+-    }
+-
+-  if (memcmp(((ElfW(Ehdr) *) ehdr)->e_ident, ELFMAG, SELFMAG) != 0)
+-    {
+-      fprintf(stderr, "file is not ELF format\n");
+-      goto unmap;
+-    }
+-
+-  if (((ElfW(Ehdr) *)ehdr)->e_phentsize != sizeof(ElfW(Phdr)))
+-    {
+-      fprintf(stderr, "ELF header's e_phentsize mismatch ElfW(Phdr) size\n");
+-      goto unmap;
+-    }
+-
+-  unsigned int size = ((ElfW(Ehdr) *)ehdr)->e_phnum * sizeof(ElfW(Phdr));
+-  if (size == 0 || size > ELF_MIN_ALIGN)
+-    {
+-      fprintf(stderr, "The program header table size specified by ELF header is abnormal: %u\n", size);
+-      goto unmap;
+-    }
+-
+-  void *ephdr_s = ehdr + ((ElfW(Ehdr) *)ehdr)->e_phoff;
+-  void *ephdr_e = ehdr + ((ElfW(Ehdr) *)ehdr)->e_phoff + size;
+-
+-  if (check_ptr(ephdr_s, ehdr, statbuf.st_size) ||
+-        check_ptr(ephdr_e, ehdr, statbuf.st_size))
+-    {
+-      fprintf(stderr, "ELF porgram header table is not fully mmaped\n");
+-      goto unmap;
+-    }
++  void *ehdr = get_ehdr(fd, &length);
++  if (ehdr == NULL)
++    goto close_fd;
+ 
+-  ElfW(Phdr) *phdr = (ElfW(Phdr) *)ephdr_s;
++  ElfW(Phdr) *phdr = (ElfW(Phdr) *)get_phdr(ehdr, length);
++  if (phdr == NULL)
++    goto unmap;
+   /*
+    * Here, mark hugepage flag in ELF header e_ident padding bytes won't work.
+    * elf/dl-load.c open_verify will check if shared object ELF header e_ident
+@@ -160,7 +109,7 @@ int main(int argc, char *argv[])
+   exit_status = 0;
+ 
+ unmap:
+-  munmap(ehdr, statbuf.st_size);
++  munmap(ehdr, length);
+ 
+ close_fd:
+   close(fd);
+diff --git a/elf/tst-check-hugepage.sh b/elf/tst-check-hugepage.sh
+new file mode 100644
+index 00000000..0cdebe2a
+--- /dev/null
++++ b/elf/tst-check-hugepage.sh
+@@ -0,0 +1,72 @@
++#!/bin/sh
++# check whether ld.so use hugepage when loading shared object and whether
++# there are exceptions when using hugepage
++# Copyright (C) 2021-2021 Free Software Foundation, Inc.
++# This file is part of the GNU C Library.
++
++# The GNU C Library is free software; you can redistribute it and/or
++# modify it under the terms of the GNU Lesser General Public
++# License as published by the Free Software Foundation; either
++# version 2.1 of the License, or (at your option) any later version.
++
++# The GNU C Library is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++# Lesser General Public License for more details.
++
++# You should have received a copy of the GNU Lesser General Public
++# License along with the GNU C Library; if not, see
++# <http://www.gnu.org/licenses/>.
++
++check_hugepage_mmap () {
++  log=$1
++
++  cat $log | egrep "reserved area|_dl_map_segments_largein:" > /dev/null && return 0
++  return 1
++}
++
++check_hugepage_mmap_success () {
++  log=$1
++
++  # check whether the log contains fallback log
++  cat $log | grep "_dl_map_segments_largein:" > /dev/null && return 1
++  check_hugepage_mmap $log || return 1
++  left=$(cat $log | grep _mmap_segment | wc -l)
++  right=$(cat $log | grep "} => mapseglen" | wc -l)
++  if [ $left -eq $right ]; then
++    return 0
++  else
++    return 1
++  fi
++}
++
++check_hugepage_fallback () {
++  log=$1
++
++  cat $log | grep "_dl_map_segments_largein:" > /dev/null && return 0
++  return 1
++}
++
++# return 0: mmap hugepage correctly
++# return 1: Non-hugepage mmap
++# return 2: mmap hugepage wrongly
++check_hugepage_mmap_detail () {
++  log=$1
++
++  # check whether the log contains hugepage mmap
++  areas=$(cat $log | grep "mmap hugepage:" | awk '{print $4}' | cut -d '[' -f2 | cut -d ')' -f1)
++  if test -z "$areas"; then
++    return 1
++  else
++    for area in $areas; do
++      num=$(grep "mmap hugepage: \[$area)" $log | wc -l)
++      num=$(( $num * 2))
++      total_num=$(grep $area $log | wc -l)
++      if [ $num -ne $total_num ]; then
++        return 2
++      fi
++      grep -A21 $area $log | tail -22
++    done
++    return 0
++  fi
++}
+diff --git a/elf/tst-dl-hugepage.sh b/elf/tst-dl-hugepage.sh
+new file mode 100644
+index 00000000..f67e552f
+--- /dev/null
++++ b/elf/tst-dl-hugepage.sh
+@@ -0,0 +1,70 @@
++#!/bin/sh
++# Test that ld.so can handle dlopen call
++# Copyright (C) 2021-2021 Free Software Foundation, Inc.
++# This file is part of the GNU C Library.
++
++# The GNU C Library is free software; you can redistribute it and/or
++# modify it under the terms of the GNU Lesser General Public
++# License as published by the Free Software Foundation; either
++# version 2.1 of the License, or (at your option) any later version.
++
++# The GNU C Library is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++# Lesser General Public License for more details.
++
++# You should have received a copy of the GNU Lesser General Public
++# License along with the GNU C Library; if not, see
++# <http://www.gnu.org/licenses/>.
++
++set -ex
++echo "source $4"
++source $4
++
++common_objpfx=$1
++test_wrapper=$2
++test_wrapper_env=$3
++result=0
++
++excption_handle ()
++{
++  echo "ld.so hugepage feature is not behaving as expected, return $1"
++  result=1
++}
++
++check_global_var ()
++{
++  log=$1
++
++  for i in $(seq 1 2); do
++    cat $log | grep "In huge_func, huge_global = $i" > /dev/null|| return -1
++  done
++  return 0
++}
++
++testroot="${common_objpfx}elf/dl-hugepage-directory"
++
++rm -rf "$testroot"
++mkdir -p $testroot
++
++echo '# reseve 200 2MB hugepage'
++echo 200 > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages || exit 1
++
++echo '# Test LD_HUGEPAGE_LIB=1 whether ld.so mmap hugepage is consistent with the actual process occupancy'
++${test_wrapper_env} LD_HUGEPAGE_LIB=1 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-dl-use-hugepage ${common_objpfx}elf/tst-ld-hugepagemod5.so > ${testroot}/log1 2>&1
++check_hugepage_mmap_detail ${testroot}/log1 && rc=0 || rc=$?
++#check_global_var ${testroot}/log1 && rc=0 || rc=$?
++test $rc -eq 0 || excption_handle $rc
++
++${test_wrapper_env} \
++${test_wrapper} ${common_objpfx}elf/hugepageedit ${common_objpfx}elf/tst-ld-hugepagemod5.so || exit 1
++
++echo '# Test HUGEPAGE_PROBE=1 whether ld.so mmap hugepage is consistent with the actual process occupancy'
++${test_wrapper_env} HUGEPAGE_PROBE=1 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-dl-use-hugepage ${common_objpfx}elf/tst-ld-hugepagemod5.so > ${testroot}/log2 2>&1
++check_hugepage_mmap_detail ${testroot}/log2 && rc=0 || rc=$?
++#check_global_var ${testroot}/log2 && rc=0 || rc=$?
++test $rc -eq 0 || excption_handle $rc
++
++exit $result
+diff --git a/elf/tst-dl-use-hugepage.c b/elf/tst-dl-use-hugepage.c
+new file mode 100644
+index 00000000..cd7c6f29
+--- /dev/null
++++ b/elf/tst-dl-use-hugepage.c
+@@ -0,0 +1,54 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include <dlfcn.h>
++#include "tst-ld-hugepage.h"
++
++#define DL_ERR_HANDLE(s) \
++do {  \
++  fprintf(stderr, "%s: %s\n", s, dlerror()); \
++  exit(EXIT_FAILURE); \
++} while(0)
++
++static void dl_flag_test(char *libname, int flags, int val)
++{
++  int *global;
++  char *error;
++  void (*funcp)(void);
++  char command[100];
++  sprintf(command, "cat /proc/%d/smaps",  getpid());
++
++  void *handle = dlopen(libname, flags);
++  if (handle == NULL)
++     DL_ERR_HANDLE("dlopen");
++
++  (void) dlerror();
++
++  *(void **)(&global) = dlsym(handle, "huge_global");
++  error = dlerror();
++  if (error != NULL)
++    DL_ERR_HANDLE("dlsym");
++
++  (void) dlerror();
++  *(void **)(&funcp) = dlsym(handle, "huge_func");
++  error = dlerror();
++  if (error != NULL)
++    DL_ERR_HANDLE("dlsym");
++
++  *global = val;
++  (*funcp)();
++  system(command);
++  dlclose(handle);
++}
++
++int main(int argc, char *argv[])
++{
++  if (argc != 2)
++    {
++      fprintf(stderr, "shared object should be a parameter\n");
++      exit(EXIT_FAILURE);
++    }
++  dl_flag_test(argv[1], RTLD_LAZY, 1);
++  dl_flag_test(argv[1], RTLD_NOW, 2);
++  return 0;
++}
+diff --git a/elf/tst-get-ephdr.h b/elf/tst-get-ephdr.h
+new file mode 100644
+index 00000000..109af265
+--- /dev/null
++++ b/elf/tst-get-ephdr.h
+@@ -0,0 +1,96 @@
++/* mmap ELF file return ELF header and get mmap length
++   Copyright (C) 1995-2021 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++#include <stdio.h>
++#include <elf.h>
++#include <link.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/mman.h>
++
++/* reference kernel load_elf_phdrs program header table size constraint */
++#define ELF_MIN_ALIGN 4096
++
++static __always_inline void *get_ehdr(int fd, size_t *len)
++{
++  struct stat statbuf;
++  *len = 0;
++  if (fstat(fd, &statbuf) != 0)
++    {
++      perror("fstat");
++      return NULL;
++    }
++
++  /* this ensures file is large enough to hold ELF header */
++  if (statbuf.st_size < sizeof (ElfW(Ehdr)))
++    {
++      fprintf(stderr, "file is not large enough to hold ELF header\n");
++      return NULL;
++    }
++
++  void *ehdr = mmap(NULL, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
++  if (ehdr == MAP_FAILED)
++    {
++      perror("mmap");
++      return NULL;
++    }
++
++  if (memcmp(((ElfW(Ehdr) *) ehdr)->e_ident, ELFMAG, SELFMAG) != 0)
++    {
++      fprintf(stderr, "file is not ELF format\n");
++      munmap(ehdr, statbuf.st_size);
++      ehdr = NULL;
++    }
++
++  *len = statbuf.st_size;
++  return ehdr;
++}
++
++static __always_inline int check_ptr(void *ptr, void *start, size_t len)
++{
++  if (ptr < start || ptr > start + len)
++    return -1;
++  return 0;
++}
++
++static __always_inline void *get_phdr(void *ehdr, size_t length)
++{
++  if (((ElfW(Ehdr) *)ehdr)->e_phentsize != sizeof(ElfW(Phdr)))
++    {
++      fprintf(stderr, "ELF header's e_phentsize mismatch ElfW(Phdr) size\n");
++      return NULL;
++    }
++
++  unsigned int size = ((ElfW(Ehdr) *)ehdr)->e_phnum * sizeof(ElfW(Phdr));
++  if (size == 0 || size > ELF_MIN_ALIGN)
++    {
++      fprintf(stderr, "The program header table size specified by ELF header is abnormal: %u\n", size);
++      return NULL;
++    }
++
++  void *ephdr_s = ehdr + ((ElfW(Ehdr) *)ehdr)->e_phoff;
++  void *ephdr_e = ehdr + ((ElfW(Ehdr) *)ehdr)->e_phoff + size;
++
++  if (check_ptr(ephdr_s, ehdr, length) ||
++        check_ptr(ephdr_e, ehdr, length))
++    {
++      fprintf(stderr, "ELF porgram header table is not fully mmaped\n");
++      return NULL;
++    }
++
++  return ephdr_s;
++}
+diff --git a/elf/tst-hugepageedit1.sh b/elf/tst-hugepageedit1.sh
+new file mode 100644
+index 00000000..ee43c279
+--- /dev/null
++++ b/elf/tst-hugepageedit1.sh
+@@ -0,0 +1,85 @@
++#!/bin/sh
++# Test that hugepageedit can handle abnormal files reasonably
++# Copyright (C) 2021-2021 Free Software Foundation, Inc.
++# This file is part of the GNU C Library.
++
++# The GNU C Library is free software; you can redistribute it and/or
++# modify it under the terms of the GNU Lesser General Public
++# License as published by the Free Software Foundation; either
++# version 2.1 of the License, or (at your option) any later version.
++
++# The GNU C Library is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++# Lesser General Public License for more details.
++
++# You should have received a copy of the GNU Lesser General Public
++# License along with the GNU C Library; if not, see
++# <http://www.gnu.org/licenses/>.
++
++set -ex
++echo "source $4"
++source $4
++
++common_objpfx=$1
++test_wrapper=$2
++test_wrapper_env=$3
++result=0
++
++excption_handle ()
++{
++  echo "hugepageedit and ls.so use hugepage feature is not beahving expected"
++  result=1
++}
++
++testroot="${common_objpfx}elf/hugepageedit-test-directory"
++
++rm -rf "$testroot"
++mkdir -p $testroot
++cp ${common_objpfx}elf/tst-use-hugepage1 $testroot/tst-use-hugepage1
++
++echo '# reseve 200 2MB hugepage'
++echo 200 > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages || exit 1
++
++echo '# Test no option hugepageedit'
++${test_wrapper_env} \
++${test_wrapper} ${common_objpfx}elf/hugepageedit ${common_objpfx}elf/tst-ld-hugepagemod1.so || exit 1
++${test_wrapper_env} HUGEPAGE_PROBE=1 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage1 > ${testroot}/log1 2>&1
++check_hugepage_mmap_success ${testroot}/log1 && rc=0 || rc=$?
++test $rc -eq 0 || excption_handle
++
++echo '# Test hugepageedit -d option'
++${test_wrapper_env} \
++${test_wrapper} ${common_objpfx}elf/hugepageedit -d ${common_objpfx}elf/tst-ld-hugepagemod1.so || exit 1
++${test_wrapper_env} HUGEPAGE_PROBE=1 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage1 > ${testroot}/log2 2>&1
++check_hugepage_mmap ${testroot}/log2 && rc=1 || rc=0
++test $rc -eq 0 || excption_handle
++
++echo '# Test hugepageedit -x option'
++${test_wrapper_env} \
++${test_wrapper} ${common_objpfx}elf/hugepageedit -x ${common_objpfx}elf/tst-ld-hugepagemod1.so || exit 1
++${test_wrapper_env} HUGEPAGE_PROBE=1 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage1 > ${testroot}/log3 2>&1
++check_hugepage_mmap_success ${testroot}/log3 && rc=0 || rc=$?
++test $rc -eq 0 || excption_handle
++
++echo '# Test Non-ELF file'
++dd if=/dev/urandom of=${testroot}/test.file count=1024 bs=1024
++${test_wrapper_env} \
++${test_wrapper}  ${common_objpfx}elf/hugepageedit ${testroot}/test.file 2>&1 && result=1
++
++echo '# Test ELF phnum is 0'
++${test_wrapper_env} \
++${test_wrapper}  ${common_objpfx}elf/tst-update-ehdr ${testroot}/tst-use-hugepage1 0 2>&1 || result=1
++${test_wrapper_env} \
++${test_wrapper}  ${common_objpfx}elf/hugepageedit ${testroot}/tst-use-hugepage1 2>&1 && result=1
++
++echo '# Test ELF phnum is 0xFFFF'
++${test_wrapper_env} \
++${test_wrapper}  ${common_objpfx}elf/tst-update-ehdr ${testroot}/tst-use-hugepage1 65535 2>&1 || result=1
++${test_wrapper_env} \
++${test_wrapper}  ${common_objpfx}elf/hugepageedit ${testroot}/tst-use-hugepage1 2>&1 && result=1
++
++exit $result
+diff --git a/elf/tst-ld-hugepage-env.sh b/elf/tst-ld-hugepage-env.sh
+new file mode 100644
+index 00000000..e16ada67
+--- /dev/null
++++ b/elf/tst-ld-hugepage-env.sh
+@@ -0,0 +1,108 @@
++#!/bin/sh
++# Test that ld.so can handle different env input
++# Copyright (C) 2021-2021 Free Software Foundation, Inc.
++# This file is part of the GNU C Library.
++
++# The GNU C Library is free software; you can redistribute it and/or
++# modify it under the terms of the GNU Lesser General Public
++# License as published by the Free Software Foundation; either
++# version 2.1 of the License, or (at your option) any later version.
++
++# The GNU C Library is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++# Lesser General Public License for more details.
++
++# You should have received a copy of the GNU Lesser General Public
++# License along with the GNU C Library; if not, see
++# <http://www.gnu.org/licenses/>.
++
++set -ex
++echo "source $4"
++source $4
++
++common_objpfx=$1
++test_wrapper=$2
++test_wrapper_env=$3
++result=0
++
++excption_handle ()
++{
++  echo "ld.so hugepage feature is not behaving as expected"
++  result=1
++}
++
++testroot="${common_objpfx}elf/ld-hugepage-env-directory"
++
++rm -rf "$testroot"
++mkdir -p $testroot
++
++echo '# reseve 200 2MB hugepage'
++echo 200 > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages || exit 1
++
++${test_wrapper_env} \
++${test_wrapper} ${common_objpfx}elf/hugepageedit -d ${common_objpfx}elf/tst-ld-hugepagemod2.so || exit 1
++
++echo '# Test HUGEPAGE_PROBE env set 1 and shared object is not hugepageedited'
++${test_wrapper_env} HUGEPAGE_PROBE=1 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage2 > ${testroot}/log1 2>&1
++check_hugepage_mmap ${testroot}/log1 && rc=1 || rc=0
++test $rc -eq 0 || excption_handle
++
++echo '# Test LD_HUGEPAGE_LIB env set 1 and shared object is not hugepageedited'
++${test_wrapper_env} LD_HUGEPAGE_LIB=1 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage2 > ${testroot}/log2 2>&1
++check_hugepage_mmap_success ${testroot}/log2 && rc=0 || rc=$?
++test $rc -eq 0 || excption_handle
++
++echo '# Test LD_HUGEPAGE_LIB env set 100 and shared object is not hugepageedited'
++${test_wrapper_env} LD_HUGEPAGE_LIB=100 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage2 > ${testroot}/log3 2>&1
++check_hugepage_mmap ${testroot}/log3 && rc=1 || rc=0
++test $rc -eq 0 || excption_handle
++
++echo '# Test LD_HUGEPAGE_LIB env set -8 and shared object is not hugepageedited'
++${test_wrapper_env} LD_HUGEPAGE_LIB=-8 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage2 > ${testroot}/log4 2>&1
++check_hugepage_mmap ${testroot}/log4 && rc=1 || rc=0
++test $rc -eq 0 || excption_handle
++
++echo '# Test LD_HUGEPAGE_LIB env set aa#_bb and shared object is not hugepageedited'
++${test_wrapper_env} LD_HUGEPAGE_LIB=aa#_bb LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage2 > ${testroot}/log5 2>&1
++check_hugepage_mmap ${testroot}/log5 && rc=1 || rc=0
++test $rc -eq 0 || excption_handle
++
++${test_wrapper_env} \
++${test_wrapper} ${common_objpfx}elf/hugepageedit ${common_objpfx}elf/tst-ld-hugepagemod2.so || exit 1
++echo '# Test HUGEPAGE_PROBE env set 2 and shared object is hugepageedited'
++${test_wrapper_env} HUGEPAGE_PROBE=2 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage2 > ${testroot}/log6 2>&1
++check_hugepage_mmap_success ${testroot}/log6 && rc=0 || rc=$?
++test $rc -eq 0 || excption_handle
++
++echo '# Test HUGEPAGE_PROBE env set -2 and shared object is hugepageedited'
++${test_wrapper_env} HUGEPAGE_PROBE=-2 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage2 > ${testroot}/log7 2>&1
++check_hugepage_mmap_success ${testroot}/log7 && rc=0 || rc=$?
++test $rc -eq 0 || excption_handle
++
++echo '# Test HUGEPAGE_PROBE env set 0 and shared object is hugepageedited'
++${test_wrapper_env} HUGEPAGE_PROBE=0 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage2 > ${testroot}/log8 2>&1
++check_hugepage_mmap_success ${testroot}/log8 && rc=0 || rc=$?
++test $rc -eq 0 || excption_handle
++
++echo '# Test HUGEPAGE_PROBE env set 3.14 and shared object is hugepageedited'
++${test_wrapper_env} HUGEPAGE_PROBE=3.14 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage2 > ${testroot}/log9 2>&1
++check_hugepage_mmap_success ${testroot}/log9 && rc=0 || rc=$?
++test $rc -eq 0 || excption_handle
++
++echo '# Test HUGEPAGE_PROBE env set #aabb and shared object is hugepageedited'
++${test_wrapper_env} HUGEPAGE_PROBE=#aabb LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage2 > ${testroot}/log10 2>&1
++check_hugepage_mmap_success ${testroot}/log10 && rc=0 || rc=$?
++test $rc -eq 0 || excption_handle
++
++exit $result
+diff --git a/elf/tst-ld-hugepage-fallback.sh b/elf/tst-ld-hugepage-fallback.sh
+new file mode 100644
+index 00000000..0c616633
+--- /dev/null
++++ b/elf/tst-ld-hugepage-fallback.sh
+@@ -0,0 +1,66 @@
++#!/bin/sh
++# Test that ld.so can fallback to original shared object load process when
++# exception happens
++# Copyright (C) 2021-2021 Free Software Foundation, Inc.
++# This file is part of the GNU C Library.
++
++# The GNU C Library is free software; you can redistribute it and/or
++# modify it under the terms of the GNU Lesser General Public
++# License as published by the Free Software Foundation; either
++# version 2.1 of the License, or (at your option) any later version.
++
++# The GNU C Library is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++# Lesser General Public License for more details.
++
++# You should have received a copy of the GNU Lesser General Public
++# License along with the GNU C Library; if not, see
++# <http://www.gnu.org/licenses/>.
++
++echo "source $4"
++source $4
++
++common_objpfx=$1
++test_wrapper=$2
++test_wrapper_env=$3
++result=0
++
++excption_handle ()
++{
++  echo "ld.so hugepage feature should fallback this time"
++  result=1
++}
++
++testroot="${common_objpfx}elf/ld-hugepage-fallback"
++
++rm -rf "$testroot"
++mkdir -p $testroot
++
++echo '# reseve 200 2MB hugepage'
++echo 200 > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages || exit 1
++
++${test_wrapper_env} \
++${test_wrapper} ${common_objpfx}elf/hugepageedit -d ${common_objpfx}elf/tst-ld-hugepagemod3.so || exit 1
++
++echo '# tst-update-phdr make shared object previous PT_LOAD segment vma > next'
++${test_wrapper_env} \
++${test_wrapper} ${common_objpfx}elf/tst-update-phdr ${common_objpfx}elf/tst-ld-hugepagemod3.so || exit 1
++
++echo '# Test LD_HUGEPAGE_LIB env set 1 and shared object is not hugepageedited'
++${test_wrapper_env} LD_HUGEPAGE_LIB=1 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage3 > ${testroot}/log1 2>&1
++check_hugepage_fallback ${testroot}/log1 && rc=0 || rc=$?
++test $rc -eq 0 || excption_handle
++
++echo '# hugepageedit shared object'
++${test_wrapper_env} \
++${test_wrapper} ${common_objpfx}elf/hugepageedit ${common_objpfx}elf/tst-ld-hugepagemod3.so || exit 1
++
++echo '# Test HUGEPAGE_PROBE env set 1 and shared object is hugepageedited'
++${test_wrapper_env} HUGEPAGE_PROBE=1 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage3 > ${testroot}/log2 2>&1
++check_hugepage_fallback ${testroot}/log2 && rc=0 || rc=$?
++test $rc -eq 0 || excption_handle
++
++exit $result
+diff --git a/elf/tst-ld-hugepage-mmap-smaps.sh b/elf/tst-ld-hugepage-mmap-smaps.sh
+new file mode 100644
+index 00000000..b817ab53
+--- /dev/null
++++ b/elf/tst-ld-hugepage-mmap-smaps.sh
+@@ -0,0 +1,49 @@
++#!/bin/sh
++# Test that ld.so mmapping hugepage is consistent with the actual process occupancy
++# Copyright (C) 2021-2021 Free Software Foundation, Inc.
++# This file is part of the GNU C Library.
++
++# The GNU C Library is free software; you can redistribute it and/or
++# modify it under the terms of the GNU Lesser General Public
++# License as published by the Free Software Foundation; either
++# version 2.1 of the License, or (at your option) any later version.
++
++# The GNU C Library is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++# Lesser General Public License for more details.
++
++# You should have received a copy of the GNU Lesser General Public
++# License along with the GNU C Library; if not, see
++# <http://www.gnu.org/licenses/>.
++
++set -ex
++echo "source $4"
++source $4
++
++common_objpfx=$1
++test_wrapper=$2
++test_wrapper_env=$3
++result=0
++
++excption_handle ()
++{
++  echo "ld.so mmap hugepage is not consistent with the actual process occupancy, return $1"
++  result=1
++}
++
++testroot="${common_objpfx}elf/ld-hugepage-mmap-smaps"
++
++rm -rf "$testroot"
++mkdir -p $testroot
++
++echo '# reseve 200 2MB hugepage'
++echo 200 > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages || exit 1
++
++echo '# Test LD_HUGEPAGE_LIB=1 whether ld.so mmap hugepage is consistent with the actual process occupancy'
++${test_wrapper_env} LD_HUGEPAGE_LIB=1 LD_DEBUG=files  \
++${test_wrapper} ${common_objpfx}elf/tst-use-hugepage4 > ${testroot}/log1 2>&1
++check_hugepage_mmap_detail ${testroot}/log1 && rc=0 || rc=$?
++test $rc -eq 0 || excption_handle $rc
++
++exit $result
+diff --git a/elf/tst-ld-hugepage.h b/elf/tst-ld-hugepage.h
+new file mode 100644
+index 00000000..30e938da
+--- /dev/null
++++ b/elf/tst-ld-hugepage.h
+@@ -0,0 +1,7 @@
++#ifndef TST_HUGEPAGE_H
++#define TST_HUGEPAGE_H
++
++extern void huge_func(void);
++extern int huge_global;
++
++#endif
+diff --git a/elf/tst-ld-hugepagemod.c b/elf/tst-ld-hugepagemod.c
+new file mode 100644
+index 00000000..70c42e5a
+--- /dev/null
++++ b/elf/tst-ld-hugepagemod.c
+@@ -0,0 +1,19 @@
++#include <stdio.h>
++
++#define BIN_PATH OBJDIR"/tst-ld-hugepage-bin.o"
++
++int huge_global;
++
++asm (".section .rodata\n\t"       \
++     ".globl vvvdso_start, vvvdso_end\n"        \
++     ".balign 4096\n"       \
++     "vvvdso_start:\n\t"        \
++     ".incbin " "\""BIN_PATH"\"" "\n\t"  \
++     ".balign 4096\n"       \
++     "vvvdso_end:\n\t"        \
++     ".previous");
++
++void huge_func(void)
++{
++  printf("In huge_func, huge_global = %d\n", huge_global);
++}
+diff --git a/elf/tst-update-ehdr.c b/elf/tst-update-ehdr.c
+new file mode 100644
+index 00000000..6d653aa0
+--- /dev/null
++++ b/elf/tst-update-ehdr.c
+@@ -0,0 +1,58 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <elf.h>
++#include <fcntl.h>
++#include <limits.h>
++#include <errno.h>
++#include <unistd.h>
++#include <sys/stat.h>
++#include "tst-get-ephdr.h"
++
++#define TOOL_NAME "tst-update-ehdr"
++
++void print_usage(void)
++{
++  fprintf(stderr, "%s <ELF file> <phdr number>\n", TOOL_NAME);
++}
++
++int main(int argc, char **argv)
++{
++  size_t length;
++  int exit_status = EXIT_FAILURE;
++
++  if (argc != 3)
++    {
++      print_usage();
++      exit(EXIT_FAILURE);
++    }
++
++  int fd = open(argv[1], O_RDWR);
++  if (fd < 0)
++    {
++      perror("open");
++      exit(EXIT_FAILURE);
++    }
++
++  void *ehdr = get_ehdr(fd, &length);
++  if (ehdr == NULL)
++    goto close_fd;
++
++  char *endptr;
++  unsigned long val = strtoul(argv[2], &endptr, 10);
++  if ((errno == ERANGE && val == ULONG_MAX) || (errno != 0 && val == 0))
++    {
++      perror("strtoul");
++      goto unmap;
++    }
++
++  ((ElfW(Ehdr) *)ehdr)->e_phnum = val;
++  exit_status = EXIT_SUCCESS;
++
++unmap:
++  munmap(ehdr, length);
++
++close_fd:
++  close(fd);
++
++  exit(exit_status);
++}
+diff --git a/elf/tst-update-phdr.c b/elf/tst-update-phdr.c
+new file mode 100644
+index 00000000..bd3e30eb
+--- /dev/null
++++ b/elf/tst-update-phdr.c
+@@ -0,0 +1,93 @@
++/* construct exception PT_LOAD segment VMA
++   make previous PT_LOAD vma > next PT_LOAD vma
++   Copyright (C) 2021-2021 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++#include <stdio.h>
++#include <stdlib.h>
++#include <fcntl.h>
++#include <string.h>
++#include <unistd.h>
++#include <elf.h>
++#include <link.h>
++#include <sys/stat.h>
++#include <sys/mman.h>
++#include <sys/types.h>
++#include "tst-get-ephdr.h"
++
++#define TOOL_NAME "tst-update-phdr"
++#define PAGE_SIZE 0x1000
++
++void print_usage(void)
++{
++  fprintf(stderr, "%s <ELF file>\n", TOOL_NAME);
++}
++
++int main(int argc, char **argv)
++{
++  size_t length;
++  int exit_status = EXIT_FAILURE;
++  int i;
++  if (argc != 2)
++    {
++      print_usage();
++      exit(EXIT_FAILURE);
++    }
++
++  int fd = open(argv[1], O_RDWR);
++  if (fd < 0)
++    {
++      perror("open");
++      exit(EXIT_FAILURE);
++    }
++
++  void *ehdr = get_ehdr(fd, &length);
++  if (ehdr == NULL)
++    goto close_fd;
++
++  ElfW(Phdr) *phdr = (ElfW(Phdr) *)get_phdr(ehdr, length);
++  if (phdr == NULL)
++    goto unmap;
++
++  ElfW(Phdr) *prev =NULL, *next = NULL;
++  for (i = 0; i < ((ElfW(Ehdr) *)ehdr)->e_phnum; i++)
++    {
++      if (prev != NULL && next != NULL)
++        break;
++      if (phdr[i].p_type == PT_LOAD)
++        {
++          if (prev == NULL)
++            prev = &phdr[i];
++          else
++            next = &phdr[i];
++        }
++    }
++  if (prev != NULL && next != NULL)
++    {
++      prev->p_vaddr = next->p_vaddr + PAGE_SIZE;
++      exit_status = EXIT_SUCCESS;
++    }
++  else
++    fprintf(stderr, "There are no PT_LOADs in %s\n", argv[1]);
++
++unmap:
++  munmap(ehdr, length);
++
++close_fd:
++  close(fd);
++
++  exit(exit_status);
++}
+diff --git a/elf/tst-use-hugepage.c b/elf/tst-use-hugepage.c
+new file mode 100644
+index 00000000..938e0afc
+--- /dev/null
++++ b/elf/tst-use-hugepage.c
+@@ -0,0 +1,15 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include "tst-ld-hugepage.h"
++
++int main(void)
++{
++  char command[100];
++  sprintf(command, "cat /proc/%d/smaps",  getpid());
++  system(command);
++  huge_func();
++  huge_global = 1;
++  huge_func();
++  return 0;
++}
+-- 
+2.27.0
+
