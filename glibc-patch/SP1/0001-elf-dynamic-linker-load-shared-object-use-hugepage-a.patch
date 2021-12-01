@@ -1,8 +1,8 @@
-From f7917612cdc45856d683c0dd39eb024db5791472 Mon Sep 17 00:00:00 2001
+From ca6f8d6b94150979191bda4b7497a73c4d63107f Mon Sep 17 00:00:00 2001
 From: Lv Ying <lvying6@huawei.com>
-Date: Thu, 16 Sep 2021 12:12:44 +0800
-Subject: [PATCH 1/2] elf: dynamic linker load shared object use hugepage as
- much as possible
+Date: Fri, 16 Jul 2021 04:11:24 +0800
+Subject: [PATCH] elf: dynamic linker load shared object use hugepage as much
+ as possible
 
 This patch provides environment variables HUGEPAGE_PROBE and LD_HUGEPAGE_LIB
 to enable load shared object use hugepage.
@@ -21,7 +21,7 @@ as much as possible. This means:
   is still larger than 2MB, first map (mapstart_align - mapstart_va) as 4KB page
   then map 2MB aligned area as hugepage, the end area (if it exists) use 4KB area
 
-Signed-off-by: Lv Ying <lvying6(a)huawei.com>
+Signed-off-by: Lv Ying <lvying6@huawei.com>
 ---
  config.h.in                    |   2 +
  configure                      |  20 ++
@@ -30,30 +30,30 @@ Signed-off-by: Lv Ying <lvying6(a)huawei.com>
  elf/dl-environ.c               |  11 +
  elf/dl-load.c                  |  38 +++
  elf/dl-load.h                  |  16 +
- elf/dl-map-segments-hugepage.h | 591 +++++++++++++++++++++++++++++++++
+ elf/dl-map-segments-hugepage.h | 593 +++++++++++++++++++++++++++++++++
  elf/elf.h                      |   4 +
- elf/hugepageedit.c             | 136 ++++++++
- elf/rtld.c                     |  54 ++-
+ elf/hugepageedit.c             | 169 ++++++++++
+ elf/rtld.c                     |  65 +++-
  sysdeps/generic/ldsodefs.h     |   6 +-
- 12 files changed, 895 insertions(+), 2 deletions(-)
+ 12 files changed, 941 insertions(+), 2 deletions(-)
  create mode 100644 elf/dl-map-segments-hugepage.h
  create mode 100644 elf/hugepageedit.c
 
 diff --git a/config.h.in b/config.h.in
-index 141db213a904..027b02727fbd 100644
+index 141db213..ed11e910 100644
 --- a/config.h.in
 +++ b/config.h.in
 @@ -240,6 +240,8 @@
  /* Build glibc with tunables support.  */
  #define HAVE_TUNABLES 0
  
-+#define  HUGEPAGE_SHARED_LIB  0
++#undef  HUGEPAGE_SHARED_LIB
 +
  /* Define if static PIE is enabled.  */
  #define ENABLE_STATIC_PIE 0
  
 diff --git a/configure b/configure
-index 95c7646ea8f0..4cd0b6f3cdf0 100755
+index 95c7646e..4cd0b6f3 100755
 --- a/configure
 +++ b/configure
 @@ -670,6 +670,7 @@ stack_protector
@@ -105,7 +105,7 @@ index 95c7646ea8f0..4cd0b6f3cdf0 100755
  # can write them unchanged into config.make.  Everything else uses
  # $machine, $vendor, and $os, and changes them whenever convenient.
 diff --git a/configure.ac b/configure.ac
-index 4df72a755ad9..cc9cd7479b53 100644
+index 4df72a75..daac135b 100644
 --- a/configure.ac
 +++ b/configure.ac
 @@ -478,6 +478,17 @@ AC_ARG_ENABLE([cet],
@@ -117,7 +117,7 @@ index 4df72a755ad9..cc9cd7479b53 100644
 +                             [enable shared library use huge page to decrease TLB miss, x86_64 aarch64 only]),
 +              [enable_hugepage_shared_library=$enableval],
 +              [enable_hugepage_shared_library=no])
-+AC_SUBST(enable_hugepage_shared_library)
++
 +LIBC_CONFIG_VAR([enable-hugepage-shared-library], [$enable_hugepage_shared_library])
 +if test "$enable_hugepage_shared_library" = yes; then
 +  AC_DEFINE(HUGEPAGE_SHARED_LIB)
@@ -127,7 +127,7 @@ index 4df72a755ad9..cc9cd7479b53 100644
  # can write them unchanged into config.make.  Everything else uses
  # $machine, $vendor, and $os, and changes them whenever convenient.
 diff --git a/elf/Makefile b/elf/Makefile
-index 302ce378b171..95dae070de64 100644
+index 8d6f5471..f19853f5 100644
 --- a/elf/Makefile
 +++ b/elf/Makefile
 @@ -117,6 +117,14 @@ others-extras   = $(ldconfig-modules)
@@ -146,14 +146,14 @@ index 302ce378b171..95dae070de64 100644
  # when there might be incompatible shared objects on disk, and the
  # purpose of this program is to remove them (among other things).
 diff --git a/elf/dl-environ.c b/elf/dl-environ.c
-index b20045b870fe..ece021a19f35 100644
+index b20045b8..d9806c08 100644
 --- a/elf/dl-environ.c
 +++ b/elf/dl-environ.c
 @@ -31,6 +31,17 @@ _dl_next_ld_env_entry (char ***position)
  
    while (*current != NULL)
      {
-+#if HUGEPAGE_SHARED_LIB
++#ifdef HUGEPAGE_SHARED_LIB
 +      #define LEN_HUGEPAGE_PROBE (sizeof("HUGEPAGE_PROBE") - 1)
 +      if (memcmp (*current, "HUGEPAGE_PROBE", LEN_HUGEPAGE_PROBE) == 0)
 +        {
@@ -168,14 +168,14 @@ index b20045b870fe..ece021a19f35 100644
  	  && (*current)[1] == 'D' && (*current)[2] == '_')
  	{
 diff --git a/elf/dl-load.c b/elf/dl-load.c
-index f60e687639b2..acc4e29e4211 100644
+index f60e6876..412aa46c 100644
 --- a/elf/dl-load.c
 +++ b/elf/dl-load.c
 @@ -72,6 +72,9 @@ struct filebuf
  #include <dl-sysdep-open.h>
  #include <dl-prop.h>
  #include <not-cancel.h>
-+#if HUGEPAGE_SHARED_LIB
++#ifdef HUGEPAGE_SHARED_LIB
 +#include <dl-map-segments-hugepage.h>
 +#endif
  
@@ -185,7 +185,7 @@ index f60e687639b2..acc4e29e4211 100644
      struct loadcmd loadcmds[l->l_phnum];
      size_t nloadcmds = 0;
      bool has_holes = false;
-+#if HUGEPAGE_SHARED_LIB
++#ifdef HUGEPAGE_SHARED_LIB
 +    bool use_hugepage = false;
 +#endif
  
@@ -195,7 +195,7 @@ index f60e687639b2..acc4e29e4211 100644
  	  if (nloadcmds > 1 && c[-1].mapend != c->mapstart)
  	    has_holes = true;
  
-+#if HUGEPAGE_SHARED_LIB
++#ifdef HUGEPAGE_SHARED_LIB
 +    if (ph->p_flags & PF_HUGEPAGE)
 +      use_hugepage = true;
 +#endif
@@ -207,7 +207,7 @@ index f60e687639b2..acc4e29e4211 100644
      /* Length of the sections to be loaded.  */
      maplength = loadcmds[nloadcmds - 1].allocend - loadcmds[0].mapstart;
  
-+#if HUGEPAGE_SHARED_LIB
++#ifdef HUGEPAGE_SHARED_LIB
 +#define ERRSTRING_BUF_LEN 1024
 +    int hp_errcode = 0;
 +    char hp_buf[ERRSTRING_BUF_LEN];
@@ -244,14 +244,14 @@ index f60e687639b2..acc4e29e4211 100644
        goto call_lose;
    }
 diff --git a/elf/dl-load.h b/elf/dl-load.h
-index 66ea2e9237ab..288d47da2f6b 100644
+index 66ea2e92..d9033bdf 100644
 --- a/elf/dl-load.h
 +++ b/elf/dl-load.h
 @@ -131,5 +131,21 @@ static const char *_dl_map_segments (struct link_map *l, int fd,
  #define DL_MAP_SEGMENTS_ERROR_MAP_ZERO_FILL \
    N_("cannot map zero-fill pages")
  
-+#if HUGEPAGE_SHARED_LIB
++#ifdef HUGEPAGE_SHARED_LIB
 +#define DL_MAP_SEGMENTS_ERROR_TYPE \
 +  N_("cannot map Non shared object file in hugepage")
 +#define DL_MAP_SEGMENTS_ERROR_READ_SEGMENT \
@@ -271,10 +271,10 @@ index 66ea2e9237ab..288d47da2f6b 100644
  #endif	/* dl-load.h */
 diff --git a/elf/dl-map-segments-hugepage.h b/elf/dl-map-segments-hugepage.h
 new file mode 100644
-index 000000000000..9803db8bda3a
+index 00000000..cd7b6d79
 --- /dev/null
 +++ b/elf/dl-map-segments-hugepage.h
-@@ -0,0 +1,591 @@
+@@ -0,0 +1,593 @@
 +/* Map a shared object's segments into hugepage.  Generic version.
 +   Copyright (C) 1995-2021 Free Software Foundation, Inc.
 +   This file is part of the GNU C Library.
@@ -421,6 +421,8 @@ index 000000000000..9803db8bda3a
 +        return DL_MAP_SEGMENTS_ERROR_MAP_ZERO_FILL;
 +    }
 +
++  if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
++    _dl_debug_printf("\t\t\t=> mmap anonymous hugepage: [%lx-%lx)\n", hp_start, hp_start + len - mod);
 +  mapat = __mmap((caddr_t) hp_start, len - mod, prot,
 +                  MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS|MAP_HUGETLB|(SHFIT_2MB << MAP_HUGE_SHIFT),
 +                  -1, 0);
@@ -867,14 +869,14 @@ index 000000000000..9803db8bda3a
 +  return errstring;
 +}
 diff --git a/elf/elf.h b/elf/elf.h
-index 7e2b072a7f75..f840cbe67f09 100644
+index 7e2b072a..935663cd 100644
 --- a/elf/elf.h
 +++ b/elf/elf.h
 @@ -730,6 +730,10 @@ typedef struct
  
  /* Legal values for p_flags (segment flags).  */
  
-+#if HUGEPAGE_SHARED_LIB
++#ifdef HUGEPAGE_SHARED_LIB
 +/* libhugetlbfs's hugeedit use 0x00100000 */
 +#define PF_HUGEPAGE (0x01000000)
 +#endif
@@ -883,12 +885,12 @@ index 7e2b072a7f75..f840cbe67f09 100644
  #define PF_R		(1 << 2)	/* Segment is readable */
 diff --git a/elf/hugepageedit.c b/elf/hugepageedit.c
 new file mode 100644
-index 000000000000..cacc05606e95
+index 00000000..14a91a4b
 --- /dev/null
 +++ b/elf/hugepageedit.c
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,169 @@
 +/* Mark ELF object ELF header hugepage flag Generic version.
-+   Copyright (C) 1995-2021 Free Software Foundation, Inc.
++   Copyright (C) 2021-2021 Free Software Foundation, Inc.
 +   This file is part of the GNU C Library.
 +
 +   The GNU C Library is free software; you can redistribute it and/or
@@ -928,24 +930,49 @@ index 000000000000..cacc05606e95
 +
 +void print_usage(void)
 +{
-+  fprintf(stderr, "%s <ELF file>\n", TOOL_NAME);
++  fprintf(stderr, "%s [-x] [-d]  <ELF file>\n"  \
++        "\tdefault mark all PT_LOAD segment PF_HUGEPAGE flag\n"  \
++        "\t-x option only mark executable PT_LOAD segment PF_HUGEPAGE flag\n" \
++        "\t-d option delete all the PT_LOAD segment PF_HUGEPAGE flag\n", TOOL_NAME);
 +}
 +
-+int main(int argc, char **argv)
++int main(int argc, char *argv[])
 +{
-+  int exit_status = EXIT_FAILURE;
-+  int i;
-+  if (argc != 2)
++  int exit_status = -1;
++  int i, opt, delete = 0, exec_only = 0;
++  while ((opt = getopt(argc, argv, "dx")) != -1)
 +    {
-+      print_usage();
-+      exit(EXIT_FAILURE);
++      switch (opt)
++        {
++          case 'd':
++            delete = 1;
++            break;
++          case 'x':
++            exec_only = 1;
++            break;
++          default:
++            print_usage();
++            return 0;
++        }
 +    }
 +
-+  int fd = open(argv[1], O_RDWR);
++  if (delete && exec_only)
++    {
++      fprintf(stderr, "can not specify -x and -d option at the same time\n");
++      return -1;
++    }
++
++  if (optind >= argc)
++    {
++      fprintf(stderr, "Expected argument after options\n");
++      return -1;
++    }
++
++  int fd = open(argv[optind], O_RDWR);
 +  if (fd < 0)
 +    {
 +      perror("open");
-+      exit(EXIT_FAILURE);
++      return -1;
 +    }
 +
 +  struct stat statbuf;
@@ -984,7 +1011,7 @@ index 000000000000..cacc05606e95
 +  unsigned int size = ((ElfW(Ehdr) *)ehdr)->e_phnum * sizeof(ElfW(Phdr));
 +  if (size == 0 || size > ELF_MIN_ALIGN)
 +    {
-+      fprintf(stderr, "The program header table size specified by ELF header is too large\n");
++      fprintf(stderr, "The program header table size specified by ELF header is abnormal: %u\n", size);
 +      goto unmap;
 +    }
 +
@@ -1000,20 +1027,28 @@ index 000000000000..cacc05606e95
 +
 +  ElfW(Phdr) *phdr = (ElfW(Phdr) *)ephdr_s;
 +  /*
-+   * mark the first PT_LOAD segment hugepage flag
 +   * Here, mark hugepage flag in ELF header e_ident padding bytes won't work.
 +   * elf/dl-load.c open_verify will check if shared object ELF header e_ident
 +   * padding bytes match expected[EI_NIDENT] byte array which padding bytes
-+   * should be zero. If it mismatches, ls.so will exit abnormally
++   * should be zero. If it mismatches, ld.so will exit abnormally
 +   */
 +  for (i = 0; i < ((ElfW(Ehdr) *)ehdr)->e_phnum; i++)
 +    {
-+      if (phdr[i].p_type != PT_LOAD)
-+        continue;
-+      phdr[i].p_flags |= PF_HUGEPAGE;
-+      break;
++      if (phdr[i].p_type == PT_LOAD)
++        {
++          if (delete)
++            {
++              phdr[i].p_flags &= ~PF_HUGEPAGE;
++            }
++          else
++            {
++              if (exec_only && !(phdr[i].p_flags & PF_X))
++                continue;
++              phdr[i].p_flags |= PF_HUGEPAGE;
++            }
++        }
 +    }
-+  exit_status = EXIT_SUCCESS;
++  exit_status = 0;
 +
 +unmap:
 +  munmap(ehdr, statbuf.st_size);
@@ -1021,25 +1056,25 @@ index 000000000000..cacc05606e95
 +close_fd:
 +  close(fd);
 +
-+  exit(exit_status);
++  return exit_status;
 +}
 diff --git a/elf/rtld.c b/elf/rtld.c
-index 4abc6dd4d1a0..83613345e81d 100644
+index d5c1f056..e5de884c 100644
 --- a/elf/rtld.c
 +++ b/elf/rtld.c
-@@ -2454,6 +2454,34 @@ process_dl_audit (char *str)
+@@ -2454,6 +2454,40 @@ process_dl_audit (char *str)
  	  }
        }
  }
 +
-+#if HUGEPAGE_SHARED_LIB
++#ifdef HUGEPAGE_SHARED_LIB
 +/* prase the hugepage use strategy of loading shared object */
 +static void
 +process_dl_huegepage (const char *dl_hugepage)
 +{
 +  static const struct
 +  {
-+    int option;
++    uint64_t option;
 +    int flag;
 +  } hpopts[] =
 +    {
@@ -1050,8 +1085,14 @@ index 4abc6dd4d1a0..83613345e81d 100644
 +  if (dl_hugepage == NULL)
 +    return;
 +
++  char *endptr;
++  uint64_t val = _dl_strtoul (dl_hugepage, &endptr);
++  /* Invalid digit in input string */
++  if (*endptr != '\0')
++    return;
++
 +  for (size_t cnt = 0; cnt < nhpopts; ++cnt)
-+    if (_dl_strtoul (dl_hugepage, NULL) == hpopts[cnt].option)
++    if (val == hpopts[cnt].option)
 +      {
 +        GLRO(dl_debug_mask) |= hpopts[cnt].flag;
 +        break;
@@ -1062,27 +1103,40 @@ index 4abc6dd4d1a0..83613345e81d 100644
  
  /* Process all environments variables the dynamic linker must recognize.
     Since all of them start with `LD_' we are a bit smarter while finding
-@@ -2579,7 +2607,13 @@ process_envvars (enum mode *modep)
+@@ -2468,6 +2502,9 @@ process_envvars (enum mode *modep)
+   char *envline;
+   enum mode mode = normal;
+   char *debug_output = NULL;
++#ifdef HUGEPAGE_SHARED_LIB
++  bool hugepage_lib_env = false;
++#endif
+ 
+   /* This is the default place for profiling data file.  */
+   GLRO(dl_profile_output)
+@@ -2579,7 +2616,16 @@ process_envvars (enum mode *modep)
  	  if (!__libc_enable_secure
  	      && memcmp (envline, "DYNAMIC_WEAK", 12) == 0)
  	    GLRO(dl_dynamic_weak) = 1;
 -	  break;
 +
-+#if HUGEPAGE_SHARED_LIB
-+	  if (memcmp (envline, "HUGEPAGE_LIB", 12) == 0)
-+      process_dl_huegepage(&envline[13]);
++#ifdef HUGEPAGE_SHARED_LIB
++	  if (memcmp (envline, "HUGEPAGE_LIB", 12) == 0 && envline[13] != '\0')
++	    {
++	      hugepage_lib_env = true;
++	      process_dl_huegepage(&envline[13]);
++	    }
 +#endif
 +
 +    break;
  
  	case 13:
  	  /* We might have some extra environment variable with length 13
-@@ -2601,6 +2635,13 @@ process_envvars (enum mode *modep)
+@@ -2601,6 +2647,13 @@ process_envvars (enum mode *modep)
  	      && memcmp (envline, "PROFILE_OUTPUT", 14) == 0
  	      && envline[15] != '\0')
  	    GLRO(dl_profile_output) = &envline[15];
 +
-+#if HUGEPAGE_SHARED_LIB
++#ifdef HUGEPAGE_SHARED_LIB
 +	  if (memcmp (envline, "HUGEPAGE_PROBE", 14) == 0 &&
 +        envline[15] != '\0')
 +      GLRO(dl_debug_mask) |= DL_HUGEPAGE_PROBE_FLAG;
@@ -1091,14 +1145,13 @@ index 4abc6dd4d1a0..83613345e81d 100644
  	  break;
  
  	case 16:
-@@ -2630,6 +2671,17 @@ process_envvars (enum mode *modep)
+@@ -2630,6 +2683,16 @@ process_envvars (enum mode *modep)
  	}
      }
  
-+#if HUGEPAGE_SHARED_LIB
++#ifdef HUGEPAGE_SHARED_LIB
 +  /* LIB_HUGEPAGE_LIB and HUGEPAGE_PROBE are both set. use LIB_HUGEPAGE_LIB */
-+  if ((GLRO(dl_debug_mask) & DL_HUGEPAGE_PROBE_FLAG) &&
-+      (GLRO(dl_debug_mask) & DL_HUGEPAGE_LIB_LARGE_IN_FLAG))
++  if ((GLRO(dl_debug_mask) & DL_HUGEPAGE_PROBE_FLAG) && hugepage_lib_env)
 +    {
 +      GLRO(dl_debug_mask) &= ~DL_HUGEPAGE_PROBE_FLAG;
 +    }
@@ -1110,15 +1163,15 @@ index 4abc6dd4d1a0..83613345e81d 100644
    *modep = mode;
  
 diff --git a/sysdeps/generic/ldsodefs.h b/sysdeps/generic/ldsodefs.h
-index 4e95659383be..b2e428e0b62f 100644
+index 8da3985c..5b9ebd4f 100644
 --- a/sysdeps/generic/ldsodefs.h
 +++ b/sysdeps/generic/ldsodefs.h
-@@ -494,7 +494,11 @@ struct rtld_global_ro
+@@ -501,7 +501,11 @@ struct rtld_global_ro
  /* These two are used only internally.  */
  #define DL_DEBUG_HELP       (1 << 10)
  #define DL_DEBUG_PRELINK    (1 << 11)
 -
-+#if HUGEPAGE_SHARED_LIB
++#ifdef HUGEPAGE_SHARED_LIB
 +#define DL_HUGEPAGE_PROBE_FLAG  (1 << 31)
 +#define DL_HUGEPAGE_LIB_LARGE_IN_FLAG  (1 << 30)
 +#define DL_HUGEPAGE_LARGE_IN 1
@@ -1127,5 +1180,5 @@ index 4e95659383be..b2e428e0b62f 100644
    EXTERN unsigned int _dl_osversion;
    /* Platform name.  */
 -- 
-2.18.4
+2.27.0
 
