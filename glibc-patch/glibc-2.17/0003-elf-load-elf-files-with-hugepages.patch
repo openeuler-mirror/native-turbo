@@ -1,0 +1,306 @@
+From 8a4b5772ba1a3b410a0a35df8211637388fc2547 Mon Sep 17 00:00:00 2001
+From: sdlzx <hdu_sdlzx@163.com>
+Date: Sat, 27 Nov 2021 23:57:26 +0800
+Subject: [PATCH] elf: load elf files with hugepages
+
+When loading elf files, we read contents of the file into
+a preallocated hugepage instead of mapping with dl_map_segments.
+Using hugepage can help us saving TLB entries.
+
+Normal libraries are not aligned to 2MB, so we should ignore the
+permissions in elf header and give the hugepage area rwx permissions.
+
+Prerequisites: reserve enough hugepages.
+(default size is 2MB*128, see huge_length in elf/dl-map-segments.h)
+---
+ config.h.in                |  3 +++
+ configure                  | 20 +++++++++++++++++
+ configure.in               | 11 ++++++++++
+ elf/dl-load.c              | 11 ++++++++--
+ elf/dl-map-segments.h      | 41 ++++++++++++++++++++++++++++++++++
+ elf/dl-reloc.c             | 18 +++++++++++----
+ elf/rtld.c                 | 45 ++++++++++++++++++++++++++++++++++++++
+ sysdeps/generic/ldsodefs.h |  7 ++++++
+ 8 files changed, 150 insertions(+), 6 deletions(-)
+
+diff --git a/config.h.in b/config.h.in
+index 820ada7..4d34a3d 100644
+--- a/config.h.in
++++ b/config.h.in
+@@ -260,4 +260,7 @@
+ /* The pt_chown binary is being built and used by grantpt.  */
+ #define HAVE_PT_CHOWN 0
+ 
++/* Enable load elf files with hugepages */
++#undef  HUGEPAGE_SHARED_LIB
++
+ #endif
+diff --git a/configure b/configure
+index 769f0fa..57474cd 100755
+--- a/configure
++++ b/configure
+@@ -612,6 +612,7 @@ exceptions
+ gnu89_inline
+ libc_cv_ssp_strong
+ libc_cv_ssp
++enable_hugepage_shared_library
+ fno_unit_at_a_time
+ libc_cv_output_format
+ libc_cv_hashstyle
+@@ -767,6 +768,7 @@ enable_systemtap
+ enable_build_nscd
+ enable_nscd
+ enable_pt_chown
++enable_hugepage_shared_library
+ with_cpu
+ '
+       ac_precious_vars='build_alias
+@@ -1431,6 +1433,9 @@ Optional Features:
+   --disable-build-nscd    disable building and installing the nscd daemon
+   --disable-nscd          library functions will not contact the nscd daemon
+   --enable-pt_chown       Enable building and installing pt_chown
++  --enable-hugepage-shared-library
++                          enable shared library use huge page to decrease TLB
++                          miss, x86_64 aarch64 only
+ 
+ Optional Packages:
+   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
+@@ -3993,6 +3998,21 @@ gnu*)
+   ;;
+ esac
+ 
++# Check whether --enable-hugepage-shared-library was given.
++if test "${enable_hugepage_shared_library+set}" = set; then :
++  enableval=$enable_hugepage_shared_library; enable_hugepage_shared_library=$enableval
++else
++  enable_hugepage_shared_library=no
++fi
++
++
++config_vars="$config_vars
++enable-hugepage-shared-library = $enable_hugepage_shared_library"
++if test "$enable_hugepage_shared_library" = yes; then
++  $as_echo "#define HUGEPAGE_SHARED_LIB 1" >>confdefs.h
++
++fi
++
+ # We keep the original values in `$config_*' and never modify them, so we
+ # can write them unchanged into config.make.  Everything else uses
+ # $machine, $vendor, and $os, and changes them whenever convenient.
+diff --git a/configure.in b/configure.in
+index 9feb463..00f1b67 100644
+--- a/configure.in
++++ b/configure.in
+@@ -354,6 +354,17 @@ gnu*)
+   ;;
+ esac
+ 
++AC_ARG_ENABLE([hugepage-shared-library],
++	      AC_HELP_STRING([--enable-hugepage-shared-library],
++			     [enable shared library use huge page to decrease TLB miss, x86_64 aarch64 only]),
++	      [enable_hugepage_shared_library=$enableval],
++	      [enable_hugepage_shared_library=no])
++
++LIBC_CONFIG_VAR([enable-hugepage-shared-library], [$enable_hugepage_shared_library])
++if test "$enable_hugepage_shared_library" = yes; then
++  AC_DEFINE(HUGEPAGE_SHARED_LIB)
++fi
++
+ # We keep the original values in `$config_*' and never modify them, so we
+ # can write them unchanged into config.make.  Everything else uses
+ # $machine, $vendor, and $os, and changes them whenever convenient.
+diff --git a/elf/dl-load.c b/elf/dl-load.c
+index 0dd6f1c..f3cde68 100644
+--- a/elf/dl-load.c
++++ b/elf/dl-load.c
+@@ -1238,8 +1238,15 @@ cannot allocate TLS data structures for initial thread");
+        This is responsible for filling in:
+        l_map_start, l_map_end, l_addr, l_contiguous, l_text_end, l_phdr
+      */
+-    errstring = _dl_map_segments (l, fd, header, type, loadcmds, nloadcmds,
+-                                  maplength, has_holes, loader);
++#ifdef  HUGEPAGE_SHARED_LIB
++    if (GLRO(dl_debug_mask) & DL_HUGEPAGE_IGNORE_RWX_FLAG)
++	errstring = _dl_map_segments_huge (l, fd, header, type, loadcmds, nloadcmds,
++					   maplength, has_holes, loader);
++    else
++#endif
++	errstring = _dl_map_segments (l, fd, header, type, loadcmds, nloadcmds,
++				      maplength, has_holes, loader);
++
+     if (__glibc_unlikely (errstring != NULL))
+       goto call_lose;
+   }
+diff --git a/elf/dl-map-segments.h b/elf/dl-map-segments.h
+index 59dd729..3079a4f 100644
+--- a/elf/dl-map-segments.h
++++ b/elf/dl-map-segments.h
+@@ -18,6 +18,47 @@
+ 
+ #include <dl-load.h>
+ 
++#ifdef HUGEPAGE_SHARED_LIB
++#include <libc-internal.h>
++
++#define MAP_HUGE_SHIFT       26
++
++ElfW(Addr) huge_start, huge_end;
++size_t huge_length = 0x200000 * 128; /* reserve enough space */
++
++static __always_inline const char *
++_dl_map_segments_huge (struct link_map *l, int fd,
++                  const ElfW(Ehdr) *header, int type,
++                  const struct loadcmd loadcmds[], size_t nloadcmds,
++                  const size_t maplength, bool has_holes,
++                  struct link_map *loader)
++{
++  const struct loadcmd *c = loadcmds;
++
++  if (huge_start == (ElfW(Addr))NULL) {
++    /* init huge page */
++    huge_start = (ElfW(Addr))__mmap(0, huge_length,
++      PROT_READ|PROT_WRITE|PROT_EXEC,
++      MAP_PRIVATE|MAP_ANONYMOUS|MAP_HUGETLB|(21 << MAP_HUGE_SHIFT), -1, 0);
++    huge_end = huge_start;
++  }
++  l->l_map_start = huge_end;
++  huge_end += ALIGN_UP (loadcmds[nloadcmds - 1].allocend, GLRO(dl_pagesize)) - loadcmds[0].mapstart;
++  l->l_map_end = huge_end;
++  l->l_contiguous = !has_holes;
++  l->l_addr = l->l_map_start - c->mapstart;
++  while (c < &loadcmds[nloadcmds]) {
++    /* use read instead of mmap */
++    lseek(fd, c->mapoff, SEEK_SET);
++    __read(fd, (void*)(c->mapstart + l->l_addr), c->dataend - c->mapstart);
++    _dl_postprocess_loadcmd(l, header, c);
++    ++c;
++  }
++
++  return NULL;
++}
++#endif
++
+ /* This implementation assumes (as does the corresponding implementation
+    of _dl_unmap_segments, in dl-unmap-segments.h) that shared objects
+    are always laid out with all segments contiguous (or with gaps
+diff --git a/elf/dl-reloc.c b/elf/dl-reloc.c
+index 79aaf4d..d41cfb3 100644
+--- a/elf/dl-reloc.c
++++ b/elf/dl-reloc.c
+@@ -300,11 +300,21 @@ _dl_relocate_object (struct link_map *l, struct r_scope_elem *scope[],
+ 
+       textrels = textrels->next;
+     }
++#ifdef HUGEPAGE_SHARED_LIB
++  if (GLRO(dl_debug_mask) & DL_HUGEPAGE_IGNORE_RWX_FLAG)
++    {
++      /* We cannot protect data in rwx hugepages */
++    }
++  else
++#endif
++    {
++      /* In case we can protect the data now that the relocations are
++	 done, do it.  */
++      if (l->l_relro_size != 0)
++	_dl_protect_relro (l);
++    }
+ 
+-  /* In case we can protect the data now that the relocations are
+-     done, do it.  */
+-  if (l->l_relro_size != 0)
+-    _dl_protect_relro (l);
++  /* We cannot protect data in rwx hugepages */
+ }
+ 
+ 
+diff --git a/elf/rtld.c b/elf/rtld.c
+index e934ad3..e5b2540 100644
+--- a/elf/rtld.c
++++ b/elf/rtld.c
+@@ -68,6 +68,40 @@ static void process_dl_audit (char *str);
+ /* This is a list of all the modes the dynamic loader can be in.  */
+ enum mode { normal, list, verify, trace };
+ 
++#ifdef HUGEPAGE_SHARED_LIB
++/* prase the hugepage use strategy of loading shared object */
++static void
++process_dl_hugepage (const char *dl_hugepage)
++{
++  static const struct
++  {
++    uint64_t option;
++    int flag;
++  } hpopts[] =
++    {
++      {DL_HUGEPAGE_LARGE_IN, DL_HUGEPAGE_LIB_LARGE_IN_FLAG},
++      {DL_HUGEPAGE_IGNORE_RWX, DL_HUGEPAGE_IGNORE_RWX_FLAG}
++    };
++#define nhpopts (sizeof (hpopts) / sizeof (hpopts[0]))
++
++  if (dl_hugepage == NULL)
++    return;
++
++  char *endptr;
++  uint64_t val = __strtoul_internal (dl_hugepage, &endptr, 10, 0);
++  /* Invalid digit in input string */
++  if (*endptr != '\0')
++    return;
++
++  for (size_t cnt = 0; cnt < nhpopts; ++cnt)
++    if (val == hpopts[cnt].option)
++      {
++	 GLRO(dl_debug_mask) |= hpopts[cnt].flag;
++	 break;
++      }
++}
++#endif
++
+ /* Process all environments variables the dynamic linker must recognize.
+    Since all of them start with `LD_' we are a bit smarter while finding
+    all the entries.  */
+@@ -2570,6 +2604,12 @@ process_envvars (enum mode *modep)
+ 	      break;
+ 	    }
+ 
++	  if (memcmp (envline, "HUGEPAGE_LIB", 12) == 0 && envline[13] != '\0')
++	    {
++	      process_dl_hugepage(&envline[13]);
++	      break;
++	    }
++
+ 	  if (!INTUSE(__libc_enable_secure)
+ 	      && memcmp (envline, "DYNAMIC_WEAK", 12) == 0)
+ 	    GLRO(dl_dynamic_weak) = 1;
+@@ -2624,6 +2664,11 @@ process_envvars (enum mode *modep)
+ 	}
+     }
+ 
++#ifdef HUGEPAGE_SHARED_LIB
++  /* unsetenv LD_HUGEPAGE_LIB, child process should not get this env */
++  unsetenv("LD_HUGEPAGE_LIB");
++#endif
++
+   /* The caller wants this information.  */
+   *modep = mode;
+ 
+diff --git a/sysdeps/generic/ldsodefs.h b/sysdeps/generic/ldsodefs.h
+index e328584..11f4cca 100644
+--- a/sysdeps/generic/ldsodefs.h
++++ b/sysdeps/generic/ldsodefs.h
+@@ -459,6 +459,13 @@ struct rtld_global_ro
+ #define DL_DEBUG_HELP       (1 << 10)
+ #define DL_DEBUG_PRELINK    (1 << 11)
+ 
++#ifdef HUGEPAGE_SHARED_LIB
++#define DL_HUGEPAGE_PROBE_FLAG  (1 << 31)
++#define DL_HUGEPAGE_LIB_LARGE_IN_FLAG  (1 << 30)
++#define DL_HUGEPAGE_LARGE_IN 1
++#define DL_HUGEPAGE_IGNORE_RWX_FLAG  (1 << 29)
++#define DL_HUGEPAGE_IGNORE_RWX 2
++#endif
+   /* OS version.  */
+   EXTERN unsigned int _dl_osversion;
+   /* Platform name.  */
+-- 
+2.27.0
+
