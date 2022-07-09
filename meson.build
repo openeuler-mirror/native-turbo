@@ -44,13 +44,14 @@ machine_args = []
 
 
 global_inc = include_directories('.',
-    #'lib/env/include',
-    #'lib/env/@0@/include'.format(host_machine.system()),
-    #'lib/env/@0@/include'.format(arch_subdir),
+    'lib/sys/include',
+    #'lib/sys/@0@/include'.format(host_machine.system()),
+    #'lib/sys/@0@/include'.format(arch_subdir),
 )
 
 # build libs
 subdir('lib')
+subdir('tests')
 
 # final output, list all the libs and drivers to be built
 # this does not affect any part of the build, for information only.

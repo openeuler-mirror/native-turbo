@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: MulanPSL-2.0
 
 libraries = [
-        #'env',
-        'ring',
+    'sys',
+    'array',
+    'ring',
+    'hashmap',
 ]
 
 default_cflags = machine_args
@@ -25,8 +27,6 @@ foreach l:libraries
     objs = [] # other object files to link against, used e.g. for
               # instruction-set optimized versions of code
 
-    # use "deps" for internal DPDK dependencies, and "ext_deps" for
-    # external package/library requirements
     ext_deps = []
     deps = []
 

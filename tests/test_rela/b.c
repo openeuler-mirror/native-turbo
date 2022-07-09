@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-
 int run_b(int a, int b)
 {
 
@@ -10,4 +9,3 @@ int run_b(int a, int b)
 
 	return a + b;
 }
-

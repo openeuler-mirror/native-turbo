@@ -3,7 +3,6 @@
 #ifndef _DFE_RING_CORE_H_
 #define _DFE_RING_CORE_H_
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -15,8 +14,8 @@ extern "C" {
 #define __dfe_cache_aligned __dfe_aligned(DFE_CACHE_LINE_SIZE)
 
 struct dfe_ring_headtail {
-	volatile uint32_t head;      /**< prod/consumer head. */
-	volatile uint32_t tail;      /**< prod/consumer tail. */
+	volatile uint32_t head; /**< prod/consumer head. */
+	volatile uint32_t tail; /**< prod/consumer tail. */
 };
 
 struct dfe_ring {
@@ -39,10 +38,8 @@ struct dfe_ring {
 	char pad2 __dfe_cache_aligned; /**< empty cache line */
 };
 
-
 #ifdef __cplusplus
 }
 #endif
 
 #endif /* _DFE_RING_CORE_H_ */
-

@@ -1,5 +1,5 @@
 build
 /pkg/
+*.log
 *.pyc
 ~*
-
