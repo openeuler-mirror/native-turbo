@@ -1,0 +1,410 @@
+From 9ef35623cec4e38a4a6a77c98a94d35e31683267 Mon Sep 17 00:00:00 2001
+From: Chao Liu <liuchao173@huawei.com>
+Date: Wed, 26 Jan 2022 03:20:49 +0000
+Subject: [PATCH 1/1] irq: merge high-precision timer can reduce interrupts and
+ context switches.
+
+merge high-precision timer can reduce interrupts and context switches.
+
+echo divisor > /sys/kernel/merge_irq/<CPU>/period_divisor
+
+divisor range is 0 to 10
+
+0: shutdown this feature
+1: aggregate to 1ms
+2: aggregate to 0.5ms
+3: aggregate to 0.333ms
+4: aggregate to 0.25ms
+5: aggregate to 0.2ms
+6: aggregate to 0.167ms
+7: aggregate to 0.143ms
+8: aggregate to 0.125ms
+9: aggregate to 0.111ms
+10:aggregate to 0.1ms
+
+Signed-off-by: Chao Liu <liuchao173@huawei.com>
+Reviewed-by: Zhou Kang <zhoukang7@huawei.com>
+---
+ arch/x86/kernel/apic/apic.c          | 123 +++++++++++++++++++++++++++
+ drivers/clocksource/arm_arch_timer.c |  16 ++++
+ kernel/cpu.c                         |  16 ++++
+ kernel/time/Kconfig                  |   8 ++
+ kernel/time/hrtimer.c                | 114 +++++++++++++++++++++++++
+ 5 files changed, 277 insertions(+)
+
+diff --git a/arch/x86/kernel/apic/apic.c b/arch/x86/kernel/apic/apic.c
+index 24539a05c..a4a903bc6 100644
+--- a/arch/x86/kernel/apic/apic.c
++++ b/arch/x86/kernel/apic/apic.c
+@@ -458,12 +458,25 @@ int setup_APIC_eilvt(u8 offset, u8 vector, u8 msg_type, u8 mask)
+ }
+ EXPORT_SYMBOL_GPL(setup_APIC_eilvt);
+ 
++#ifdef CONFIG_EULEROS_MERGE_TIMER_IRQ
++DECLARE_PER_CPU(int, period_divisor);
++static DEFINE_PER_CPU(unsigned long, deadline_delta);
++#endif
++
+ /*
+  * Program the next event, relative to now
+  */
+ static int lapic_next_event(unsigned long delta,
+ 			    struct clock_event_device *evt)
+ {
++#ifdef CONFIG_EULEROS_MERGE_TIMER_IRQ
++	int divisor = *this_cpu_ptr(&period_divisor);
++
++	if (divisor != 0) {
++		*this_cpu_ptr(&deadline_delta) = delta;
++		return 0;
++	}
++#endif
+ 	apic_write(APIC_TMICT, delta);
+ 	return 0;
+ }
+@@ -472,6 +485,14 @@ static int lapic_next_deadline(unsigned long delta,
+ 			       struct clock_event_device *evt)
+ {
+ 	u64 tsc;
++#ifdef CONFIG_EULEROS_MERGE_TIMER_IRQ
++	int divisor = *this_cpu_ptr(&period_divisor);
++
++	if (divisor != 0) {
++		*this_cpu_ptr(&deadline_delta) = delta;
++		return 0;
++	}
++#endif
+ 
+ 	/* This MSR is special and need a special fence: */
+ 	weak_wrmsr_fence();
+@@ -2895,3 +2916,105 @@ static int __init apic_set_extnmi(char *arg)
+ 	return 0;
+ }
+ early_param("apic_extnmi", apic_set_extnmi);
++
++#ifdef CONFIG_EULEROS_MERGE_TIMER_IRQ
++static void setup_APIC(unsigned long clocks, unsigned int flags)
++{
++	unsigned int tmp_value;
++
++	apic_write(APIC_LVTT, flags);
++	tmp_value = apic_read(APIC_TDCR);
++	apic_write(APIC_TDCR,
++		(tmp_value & ~(APIC_TDR_DIV_1 | APIC_TDR_DIV_TMBASE)) |
++		APIC_TDR_DIV_16);
++	apic_write(APIC_TMICT, clocks);
++}
++
++static int calculate_lapic_timer_period(void)
++{
++	int i;
++	u64 tsc_perj = 0, tsc_start = 0;
++	unsigned long flags;
++	long t1, t2;
++
++	if (!tsc_khz)
++		return -1;
++
++	local_irq_save(flags);
++
++	/* Setup the APIC counter to maximum. */
++	setup_APIC(0xffffffff, LOCAL_TIMER_VECTOR | APIC_LVT_TIMER_PERIODIC | APIC_LVT_MASKED);
++
++	tsc_start = rdtsc();
++	tsc_perj = div_u64((u64)tsc_khz * 1000, HZ);
++	t1 = apic_read(APIC_TMCCT);
++
++	local_irq_restore(flags);
++
++	for (i = 0; i < LAPIC_CAL_LOOPS; i++) {
++		while (1) {
++			u64 tsc_now = rdtsc();
++
++			if ((tsc_now - tsc_start) >= tsc_perj) {
++				tsc_start += tsc_perj;
++				break;
++			}
++			cpu_relax();
++		}
++	}
++
++	local_irq_save(flags);
++	t2 = apic_read(APIC_TMCCT);
++	local_irq_restore(flags);
++
++	lapic_timer_period = (t1 - t2) * APIC_DIVISOR / LAPIC_CAL_LOOPS;
++
++	return 0;
++}
++
++void change_to_deadline(void *arg)
++{
++	u64 tsc;
++	unsigned long flags, delta;
++
++	local_irq_save(flags);
++
++	delta = *this_cpu_ptr(&deadline_delta);
++
++	if (!this_cpu_has(X86_FEATURE_TSC_DEADLINE_TIMER)) {
++		setup_APIC(delta, LOCAL_TIMER_VECTOR);
++	} else {
++		setup_APIC(0, LOCAL_TIMER_VECTOR | APIC_LVT_TIMER_TSCDEADLINE);
++
++		asm volatile("mfence" : : : "memory");
++
++		tsc = rdtsc();
++		wrmsrl(MSR_IA32_TSC_DEADLINE, tsc + (((u64) delta) * TSC_DIVISOR));
++	}
++
++	local_irq_restore(flags);
++}
++
++void change_to_period(void *arg)
++{
++	int d;
++	unsigned long flags;
++
++	d = *this_cpu_ptr(&period_divisor);
++
++	if (d == 0)
++		return;
++
++	if (lapic_timer_period == 0 && calculate_lapic_timer_period() < 0)
++		return;
++
++	local_irq_save(flags);
++
++	setup_APIC(lapic_timer_period * HZ / MSEC_PER_SEC / d / APIC_DIVISOR, LOCAL_TIMER_VECTOR | APIC_LVT_TIMER_PERIODIC);
++	asm volatile("mfence" : : : "memory");
++
++	wrmsrl(MSR_IA32_TSC_DEADLINE, 0);
++
++	local_irq_restore(flags);
++}
++#endif
+diff --git a/drivers/clocksource/arm_arch_timer.c b/drivers/clocksource/arm_arch_timer.c
+index 447e2a688..7b37fe76a 100644
+--- a/drivers/clocksource/arm_arch_timer.c
++++ b/drivers/clocksource/arm_arch_timer.c
+@@ -378,6 +378,10 @@ static u64 notrace sun50i_a64_read_cntvct_el0(void)
+ }
+ #endif
+ 
++#ifdef CONFIG_EULEROS_MERGE_TIMER_IRQ
++DECLARE_PER_CPU(int, period_divisor);
++#endif
++
+ #ifdef CONFIG_ARM_ARCH_TIMER_OOL_WORKAROUND
+ DEFINE_PER_CPU(const struct arch_timer_erratum_workaround *, timer_unstable_counter_workaround);
+ EXPORT_SYMBOL_GPL(timer_unstable_counter_workaround);
+@@ -389,6 +393,12 @@ static void erratum_set_next_event_generic(const int access, unsigned long evt,
+ {
+ 	unsigned long ctrl;
+ 	u64 cval;
++#ifdef CONFIG_EULEROS_MERGE_TIMER_IRQ
++	int divisor = *this_cpu_ptr(&period_divisor);
++
++	if (divisor != 0)
++		evt = arch_timer_rate / MSEC_PER_SEC / divisor;
++#endif
+ 
+ 	ctrl = arch_timer_reg_read(access, ARCH_TIMER_REG_CTRL, clk);
+ 	ctrl |= ARCH_TIMER_CTRL_ENABLE;
+@@ -716,6 +726,12 @@ static __always_inline void set_next_event(const int access, unsigned long evt,
+ {
+ 	unsigned long ctrl;
+ 	u64 cnt;
++#ifdef CONFIG_EULEROS_MERGE_TIMER_IRQ
++	int divisor = *this_cpu_ptr(&period_divisor);
++
++	if (divisor != 0)
++		evt = arch_timer_rate / MSEC_PER_SEC / divisor;
++#endif
+ 
+ 	ctrl = arch_timer_reg_read(access, ARCH_TIMER_REG_CTRL, clk);
+ 	ctrl |= ARCH_TIMER_CTRL_ENABLE;
+diff --git a/kernel/cpu.c b/kernel/cpu.c
+index 1c7c2dfd4..ced19bc0e 100644
+--- a/kernel/cpu.c
++++ b/kernel/cpu.c
+@@ -1046,6 +1046,13 @@ static int cpuhp_down_callbacks(unsigned int cpu, struct cpuhp_cpu_state *st,
+ 	return ret;
+ }
+ 
++#ifdef CONFIG_EULEROS_MERGE_TIMER_IRQ
++DECLARE_PER_CPU(int, period_divisor);
++#if defined(CONFIG_X86_64)
++extern void change_to_deadline(void *arg);
++#endif
++#endif
++
+ /* Requires cpu_add_remove_lock to be held */
+ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen,
+ 			   enum cpuhp_state target)
+@@ -1059,6 +1066,15 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen,
+ 	if (!cpu_present(cpu))
+ 		return -EINVAL;
+ 
++#ifdef CONFIG_EULEROS_MERGE_TIMER_IRQ
++	if (*per_cpu_ptr(&period_divisor, cpu) != 0) {
++		*per_cpu_ptr(&period_divisor, cpu)  = 0;
++#if defined(CONFIG_X86_64)
++		smp_call_function_single(cpu, change_to_deadline, NULL, 1);
++#endif
++	}
++#endif
++
+ 	cpus_write_lock();
+ 
+ 	cpuhp_tasks_frozen = tasks_frozen;
+diff --git a/kernel/time/Kconfig b/kernel/time/Kconfig
+index a09b1d61d..8e4421be0 100644
+--- a/kernel/time/Kconfig
++++ b/kernel/time/Kconfig
+@@ -173,5 +173,13 @@ config HIGH_RES_TIMERS
+ 	  hardware is not capable then this option only increases
+ 	  the size of the kernel image.
+ 
++config EULEROS_MERGE_TIMER_IRQ
++	bool "merge high-precision timer interrupts"
++	default y
++	depends on ARM64 || X86_64
++	help
++	  Say Y here to merge high-precision timer interrupts, which can
++	  reduce interrupts and context switches.
++
+ endmenu
+ endif
+diff --git a/kernel/time/hrtimer.c b/kernel/time/hrtimer.c
+index 4ef90718c..cf00b9e52 100644
+--- a/kernel/time/hrtimer.c
++++ b/kernel/time/hrtimer.c
+@@ -41,6 +41,9 @@
+ #include <linux/timer.h>
+ #include <linux/freezer.h>
+ #include <linux/compat.h>
++#ifdef CONFIG_EULEROS_MERGE_TIMER_IRQ
++#include <linux/sched/isolation.h>
++#endif
+ 
+ #include <linux/uaccess.h>
+ 
+@@ -2282,3 +2285,114 @@ int __sched schedule_hrtimeout(ktime_t *expires,
+ 	return schedule_hrtimeout_range(expires, 0, mode);
+ }
+ EXPORT_SYMBOL_GPL(schedule_hrtimeout);
++
++#ifdef CONFIG_EULEROS_MERGE_TIMER_IRQ
++
++DEFINE_PER_CPU(int, period_divisor);
++static DEFINE_PER_CPU(u64, last_write_jiffies);
++
++#if defined(CONFIG_X86_64)
++extern void change_to_deadline(void *arg);
++extern void change_to_period(void *arg);
++#endif
++
++static ssize_t period_divisor_store(struct kobject *kobj, struct kobj_attribute *attr,
++			     const char *buf, size_t count)
++{
++	int divisor, cpu, rv;
++	u64 last_jiffies;
++
++	rv = kstrtoint(buf, 10, &divisor);
++	if (rv < 0)
++		return rv;
++	if (divisor < 0 || divisor > 10) {
++		pr_warn("invalid input of cpu %s's preiod divisor\n", kobj->name);
++		return -EINVAL;
++	}
++
++	rv = kstrtoint(kobj->name, 10, &cpu);
++	if (rv < 0)
++		return rv;
++
++	last_jiffies = *per_cpu_ptr(&last_write_jiffies, cpu);
++	if (last_jiffies == 0)
++		*per_cpu_ptr(&last_write_jiffies, cpu) = jiffies_64;
++	else if (jiffies_64 - last_jiffies < HZ)
++		return -EBUSY;
++
++	*per_cpu_ptr(&last_write_jiffies, cpu) = jiffies_64;
++
++	if (*per_cpu_ptr(&period_divisor, cpu) == divisor)
++		return count;
++
++	cpu_hotplug_disable();
++
++	if (!cpu_online(cpu)) {
++		pr_warn("CPU %d is offline, cannot set CPU's period divisor\n", cpu);
++		cpu_hotplug_enable();
++		return -EBUSY;
++	}
++
++	*per_cpu_ptr(&period_divisor, cpu) = divisor;
++
++#if defined(CONFIG_X86_64)
++	if (divisor == 0)
++		smp_call_function_single(cpu, change_to_deadline, NULL, 1);
++	else
++		smp_call_function_single(cpu, change_to_period, NULL, 1);
++#endif
++
++	cpu_hotplug_enable();
++
++	return count;
++}
++
++static ssize_t period_divisor_show(struct kobject *kobj,
++			    struct kobj_attribute *attr, char *buf)
++{
++	int cpu, rv;
++
++	rv = kstrtoint(kobj->name, 10, &cpu);
++	if (rv < 0)
++		return rv;
++
++	return sprintf(buf, "%d\n", *per_cpu_ptr(&period_divisor, cpu));
++}
++
++static struct kobj_attribute period_divisor_attr = __ATTR_RW(period_divisor);
++
++static int __init period_divisor_init(void)
++{
++	int cpu, ret;
++	struct kobject *merge_irq, *dir;
++	char buf[NAME_MAX];
++
++	if (hrtimer_hres_enabled == false) {
++		pr_info("Cannot enable clock irq merge when hrtimer hres is diabled.\n");
++		return 0;
++	}
++
++	merge_irq = kobject_create_and_add("merge_irq", kernel_kobj);
++	if (!merge_irq)
++		return -ENOMEM;
++
++	for_each_possible_cpu(cpu) {
++		if (!housekeeping_test_cpu(cpu, HK_FLAG_DOMAIN) ||
++			!housekeeping_test_cpu(cpu, HK_FLAG_TICK) ||
++			!housekeeping_test_cpu(cpu, HK_FLAG_TIMER))
++			continue;
++		snprintf(buf, NAME_MAX, "%d", cpu);
++		dir = kobject_create_and_add(buf, merge_irq);
++		if (!dir)
++			return -ENOMEM;
++		ret = sysfs_create_file(dir, &period_divisor_attr.attr);
++		if (ret) {
++			kobject_put(dir);
++			return ret;
++		}
++	}
++	return 0;
++}
++late_initcall(period_divisor_init);
++
++#endif
+-- 
+2.34.1
+
