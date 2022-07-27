@@ -3,7 +3,7 @@
 #include "dfe_ring.h"
 
 unsigned int
-dfe_ring_enqueue_burst(struct dfe_ring *r, void * const *obj_table, unsigned int n)
+dfe_ring_enqueue_burst(struct dfe_ring *r, void *const *obj_table, unsigned int n)
 {
 	(void)r;
 	(void)obj_table;
@@ -19,4 +19,3 @@ dfe_ring_dequeue_burst(struct dfe_ring *r, void **obj_table, unsigned int n)
 	(void)n;
 	return 0;
 }
-

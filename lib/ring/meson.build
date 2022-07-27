@@ -3,5 +3,5 @@
 sources = files('dfe_ring.c')
 headers = files('dfe_ring.h')
 indirect_headers += files (
-        'dfe_ring_core.h',
+    'dfe_ring_core.h',
 )
