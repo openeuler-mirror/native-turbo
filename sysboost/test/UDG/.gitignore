@@ -1,0 +1,11 @@
+*.bolt
+*.out
+*.asm
+*.log
+*.rela
+*.ro
+*.so
+*.old
+*.elf
+cell_boot
+
