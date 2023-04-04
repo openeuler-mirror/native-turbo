@@ -173,8 +173,18 @@ void test_IFUNC(void)
 		printf("%s: error\n", __func__);
 }
 
-int main(void)
+#define TEST_DLSYM_FLAG (1 << 0)
+
+int main(int argc, char *argv[])
 {
+	// arg0 is program name, parameter is from arg1
+	int cur_arg = 1;
+	unsigned long test_flag = 0;
+
+	if (cur_arg < argc && strcmp(argv[cur_arg], "-dlsym") == 0) {
+		test_flag |= TEST_DLSYM_FLAG;
+	}
+
 	test_switch();
 
 	test_global_var();
@@ -184,7 +194,9 @@ int main(void)
 	test_local_ELF_func();
 	test_lib();
 
-	test_dlsym();
+	if (test_flag & TEST_DLSYM_FLAG) {
+		test_dlsym();
+	}
 
 	test_IFUNC();
 
