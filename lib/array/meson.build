@@ -2,5 +2,5 @@
 
 includes += global_inc
 
-sources = files('dfe_array.c')
-headers = files('dfe_array.h')
+sources = files('si_array.c')
+headers = files('si_array.h')
