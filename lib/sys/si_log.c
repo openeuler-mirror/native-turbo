@@ -11,7 +11,7 @@
 static struct si_logs {
 	uint32_t level;
 } g_si_logs = {
-    .level = SI_LOG_DEBUG,
+    .level = SI_LOG_LEVEL_DEBUG,
 };
 
 void si_log_set_global_level(uint32_t level)

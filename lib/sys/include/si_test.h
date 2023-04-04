@@ -4,7 +4,7 @@
 
 #include <stdio.h>
 
-#define SI_TEST_ASSERT(cond, msg, ...)                                                                     \
+#define SI_TEST_ASSERT(cond, msg, ...)                                                                      \
 	do {                                                                                                \
 		if (!(cond)) {                                                                              \
 			printf("TEST_ASSERT %s : %d failed: " msg "\n", __func__, __LINE__, ##__VA_ARGS__); \
