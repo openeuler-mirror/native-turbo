@@ -5,18 +5,35 @@
 #include <stdarg.h>
 #include <stdint.h>
 
-#define SI_LOG_EMERG 1U	  /**< System is unusable.               */
-#define SI_LOG_ALERT 2U	  /**< Action must be taken immediately. */
-#define SI_LOG_CRIT 3U	  /**< Critical conditions.              */
-#define SI_LOG_ERR 4U	  /**< Error conditions.                 */
-#define SI_LOG_WARNING 5U /**< Warning conditions.               */
-#define SI_LOG_NOTICE 6U  /**< Normal but significant condition. */
-#define SI_LOG_INFO 7U	  /**< Informational.                    */
-#define SI_LOG_DEBUG 8U	  /**< Debug-level messages.             */
+// Definition of log levels
+typedef enum LogLevel {
+	SI_LOG_LEVEL_EMERG = 1,   /**< System is unusable.               */
+	SI_LOG_LEVEL_ALERT,   /**< Action must be taken immediately. */
+	SI_LOG_LEVEL_CRIT,    /**< Critical conditions.              */
+	SI_LOG_LEVEL_NOTICE,  /**< Normal but significant condition. */
+	SI_LOG_LEVEL_INFO,    /**< Informational.                    */
+	SI_LOG_LEVEL_WARNING, /**< Warning conditions.               */
+	SI_LOG_LEVEL_ERR,     /**< Error conditions.                 */
+	SI_LOG_LEVEL_DEBUG,   /**< Debug-level messages.             */
+} LogLevel;
 
 void si_log_set_global_level(uint32_t level);
 int si_log(uint32_t level, const char *format, ...);
-#define si_log_info(...) si_log(SI_LOG_INFO, ##__VA_ARGS__)
-#define si_log_debug(...) si_log(SI_LOG_DEBUG, ##__VA_ARGS__)
 
+// Log Macro Encapsulation
+#define SI_LOG(level, format, ...)                                                           \
+	do {                                                                                 \
+		if (level >= 0) {                                                            \
+			si_log(level, "[%s:%d] " format, __func__, __LINE__, ##__VA_ARGS__); \
+		}                                                                            \
+	} while (0)
+
+#define SI_LOG_EMERG(format, ...) SI_LOG(SI_LOG_LEVEL_EMERG, format, ##__VA_ARGS__)
+#define SI_LOG_ALERT(format, ...) SI_LOG(SI_LOG_LEVEL_ALERT, format, ##__VA_ARGS__)
+#define SI_LOG_CRIT(format, ...) SI_LOG(SI_LOG_LEVEL_CRIT, format, ##__VA_ARGS__)
+#define SI_LOG_NOTICE(format, ...) SI_LOG(SI_LOG_LEVEL_NOTICE, format, ##__VA_ARGS__)
+#define SI_LOG_INFO(format, ...) SI_LOG(SI_LOG_LEVEL_INFO, format, ##__VA_ARGS__)
+#define SI_LOG_WARNING(format, ...) SI_LOG(SI_LOG_LEVEL_WARNING, format, ##__VA_ARGS__)
+#define SI_LOG_ERR(format, ...) SI_LOG(SI_LOG_LEVEL_ERR, format, ##__VA_ARGS__)
+#define SI_LOG_DEBUG(format, ...) SI_LOG(SI_LOG_LEVEL_DEBUG, format, ##__VA_ARGS__)
 #endif /* _SI_LOG_H */
