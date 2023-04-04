@@ -13,8 +13,8 @@
 
 #include "elf_read_elf.h"
 #include "si_common.h"
-#include "si_debug.h"
-#include "si_log.h"
+#include <si_debug.h>
+#include <si_log.h>
 
 #define DEBUG_SEC_PRE_NAME ".debug_"
 
@@ -52,7 +52,7 @@ unsigned elf_find_symbol_index_by_name(elf_file_t *ef, const char *name)
 	for (int i = 0; i < count; i++) {
 		Elf64_Sym *sym = &syms[i];
 		char *sym_name = elf_get_symbol_name(ef, sym);
-		si_log(SI_LOG_DEBUG, "%s %s\n", name, sym_name);
+		SI_LOG_DEBUG("%s %s\n", name, sym_name);
 		if (strcmp(sym_name, name) == 0)
 			return i;
 	}
@@ -377,7 +377,7 @@ static int read_elf_info(int fd, elf_file_t *ef)
 
 	ret = lseek(fd, 0, SEEK_END);
 	buf = mmap(0, ret, PROT_READ, MAP_PRIVATE, fd, 0);
-	si_log(SI_LOG_DEBUG, "ELF len %d, buf addr 0x%08lx\n", ret, (unsigned long)buf);
+	SI_LOG_DEBUG("ELF len %d, buf addr 0x%08lx\n", ret, (unsigned long)buf);
 
 	ef->hdr = (Elf64_Ehdr *)buf;
 	elf_parse_hdr(ef);
@@ -385,20 +385,33 @@ static int read_elf_info(int fd, elf_file_t *ef)
 	return 0;
 }
 
-int elf_read_file(char *file_name, elf_file_t *elf_file)
+int elf_read_file(char *file_name, elf_file_t *ef)
 {
 	int fd = -1;
 
 	fd = open(file_name, O_RDONLY);
 	if (fd == -1) {
-		si_log(SI_LOG_ERR, "open %s fail\n", file_name);
+		SI_LOG_ERR("open %s fail\n", file_name);
 		return -1;
 	}
-	elf_file->fd = fd;
-	elf_file->file_name = strdup(file_name);
+	ef->fd = fd;
+	ef->file_name = strdup(file_name);
 
-	// TODO: fix error return
-	(void)read_elf_info(fd, elf_file);
+	int ret = read_elf_info(fd, ef);
+	if (ret != 0) {
+		si_panic("read_elf_info fail, %s\n", file_name);
+	}
+
+	// ELF must pie, we read insn with offset
+	if (ef->hdr_Phdr->p_vaddr != 0UL) {
+		si_panic("ELF must compile with pie, %s\n", file_name);
+	}
+
+	// ELF must have relocation
+	Elf64_Shdr *sec = elf_find_section_by_name(ef, ".rela.text");
+	if (sec == NULL) {
+		si_panic("ELF must have .rela.text, %s\n", file_name);
+	}
 
 	return 0;
 }
@@ -410,14 +423,14 @@ void elf_show_sections(elf_file_t *ef)
 	Elf64_Shdr *secs = ef->sechdrs;
 	int len = ef->hdr->e_shnum;
 
-	si_log(SI_LOG_DEBUG, "  [Nr] Name                             Type            Address          Offset   Size   ES Flg      Link Info Align\n");
+	SI_LOG_DEBUG("  [Nr] Name                             Type            Address          Offset   Size   ES Flg      Link Info Align\n");
 
 	for (int i = 0; i < len; i++) {
 		sec = &secs[i];
 		name = elf_get_section_name(ef, sec);
-		si_log(SI_LOG_DEBUG, "  [%2d] %-32s %015x %016lx %08x %06x %02x %08x %4d %4d %5d\n",
-		       i, name, sec->sh_type, (unsigned long)sec->sh_addr, (unsigned int)sec->sh_offset, (unsigned int)sec->sh_size,
-		       (unsigned int)sec->sh_entsize, (int)sec->sh_flags, sec->sh_link, sec->sh_info, (int)sec->sh_addralign);
+		SI_LOG_DEBUG("  [%2d] %-32s %015x %016lx %08x %06x %02x %08x %4d %4d %5d\n",
+			     i, name, sec->sh_type, (unsigned long)sec->sh_addr, (unsigned int)sec->sh_offset, (unsigned int)sec->sh_size,
+			     (unsigned int)sec->sh_entsize, (int)sec->sh_flags, sec->sh_link, sec->sh_info, (int)sec->sh_addralign);
 	}
 }
 
@@ -429,11 +442,11 @@ void elf_show_segments(elf_file_t *ef)
 
 	base = (Elf64_Phdr *)((void *)ef->hdr + ef->hdr->e_phoff);
 
-	si_log(SI_LOG_DEBUG, "  Type     Offset   VirtAddr         PhysAddr         FileSiz  MemSiz   Flg      Align\n");
+	SI_LOG_DEBUG("  Type     Offset   VirtAddr         PhysAddr         FileSiz  MemSiz   Flg      Align\n");
 	for (int i = 0; i < len; i++) {
 		p = &base[i];
-		si_log(SI_LOG_DEBUG, "  %08x %08x %016lx %016lx %08x %08x %08x %08x\n",
-		       p->p_type, (unsigned int)p->p_offset, p->p_vaddr, p->p_paddr,
-		       (unsigned int)p->p_filesz, (unsigned int)p->p_memsz, p->p_flags, (unsigned int)p->p_align);
+		SI_LOG_DEBUG("  %08x %08x %016lx %016lx %08x %08x %08x %08x\n",
+			     p->p_type, (unsigned int)p->p_offset, p->p_vaddr, p->p_paddr,
+			     (unsigned int)p->p_filesz, (unsigned int)p->p_memsz, p->p_flags, (unsigned int)p->p_align);
 	}
 }
