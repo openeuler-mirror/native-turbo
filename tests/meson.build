@@ -2,7 +2,7 @@
 
 apps = [
         'test_array',
-	'test_hashmap',
+	    'test_hashmap',
         #'test_rela',
 ]
 
@@ -37,7 +37,7 @@ foreach app:apps
     endif
 
     link_libs = []
-    link_libs = dfe_static_libraries
+    link_libs = si_static_libraries
 
     executable(name + '.out', sources,
             c_args: cflags,
