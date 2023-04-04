@@ -27,9 +27,9 @@ endif
 
 # set up some global vars for compiler, platform, configuration, etc.
 cc = meson.get_compiler('c')
-dfe_source_root = meson.current_source_dir()
-dfe_build_root = meson.current_build_dir()
-dfe_static_libraries = []
+si_source_root = meson.current_source_dir()
+si_build_root = meson.current_build_dir()
+si_static_libraries = []
 abi_version_file = files('ABI_VERSION')
 
 if host_machine.cpu_family().startswith('x86')
@@ -40,8 +40,9 @@ elif host_machine.cpu_family().startswith('riscv')
     arch_subdir = 'riscv'
 endif
 
-machine_args = []
-
+machine_args = ['-Wall', '-Werror', '-Wextra', '-Wformat', '-g', '-D_GNU_SOURCE',
+                '-fno-jump-tables', '-Wl,-z,relro,-z,now', '-Bsymbolic', '-zcommon-page-size=2097152', '-zmax-page-size=2097152']
+lk_args = ['-Wl,--emit-relocs']
 
 global_inc = include_directories('.',
     'lib/sys/include',
@@ -52,6 +53,7 @@ global_inc = include_directories('.',
 # build libs
 subdir('lib')
 subdir('tests')
+subdir('sysboost')
 
 # final output, list all the libs and drivers to be built
 # this does not affect any part of the build, for information only.

@@ -1276,7 +1276,7 @@ static void elf_link_write_sections(elf_link_t *elf_link)
 	// .shstrtab
 	write_shstrtab(elf_link);
 
-	/* 
+	/*
 	 * .comment is useless, it's used to hold comments about the generated ELF
 	 * (details such as compiler version and execution platform).
 	 */
@@ -1301,7 +1301,7 @@ void elf_link_write(elf_link_t *elf_link)
 		modify_INTERP_segment(elf_link);
 	}
 
-	/* 
+	/*
 	 * Notes segment is not processed.
 	 * ELF notes allow for appending arbitrary information for the system to use.
 	 * For example, the GNU tool chain uses ELF notes to pass

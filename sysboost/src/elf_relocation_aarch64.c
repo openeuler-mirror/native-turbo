@@ -740,7 +740,7 @@ int modify_local_call_rela(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rel
 		return 0;
 	case R_AARCH64_LD64_GOT_LO12_NC:
 	case R_AARCH64_LD64_GOTPAGE_LO15:
-		//if a symbol in dynamic or data.rel.ro, but it is needed to find address by got, should skip it
+		// if a symbol in dynamic or data.rel.ro, but it is needed to find address by got, should skip it
 		return 0;
 	case R_AARCH64_TLSLE_ADD_TPREL_HI12:
 		return 0;

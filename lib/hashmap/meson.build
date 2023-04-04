@@ -2,5 +2,5 @@
 
 includes += global_inc
 
-sources = files('dfe_hashmap.c')
-headers = files('dfe_hashmap.h')
+sources = files('si_hashmap.c')
+headers = files('si_hashmap.h')

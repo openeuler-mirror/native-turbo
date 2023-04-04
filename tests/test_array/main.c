@@ -3,32 +3,32 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include <dfe_array.h>
-#include <dfe_test.h>
+#include <si_array.h>
+#include <si_test.h>
 
-static int test_dfe_array_append()
+static int test_si_array_append()
 {
-	dfe_array_t *arr;
+	si_array_t *arr;
 	int i;
 	int tmp;
 
-	arr = dfe_array_new(sizeof(int));
+	arr = si_array_new(sizeof(int));
 	for (i = 0; i < 10000; i++)
-		dfe_array_append(arr, &i);
+		si_array_append(arr, &i);
 
 	for (i = 0; i < 10000; i++) {
 		tmp = ((int *)arr->data)[i];
 		TEST_ASSERT(tmp == i, "arr data[i] fail");
 
-		tmp = dfe_array_index(arr, int, i);
-		TEST_ASSERT(tmp == i, "dfe_array_index fail");
+		tmp = si_array_append(arr, &i);
+		TEST_ASSERT(tmp == i, "si_array_append fail");
 	}
 
-	dfe_array_free(arr);
+	si_array_free(arr);
 	return 0;
 }
 
-static int test_dfe_array_sort()
+static int test_si_array_sort()
 {
 	//
 	return 0;
@@ -36,8 +36,8 @@ static int test_dfe_array_sort()
 
 int main(void)
 {
-	test_dfe_array_append();
-	test_dfe_array_sort();
+	test_si_array_append();
+	test_si_array_sort();
 
 	return 0;
 }

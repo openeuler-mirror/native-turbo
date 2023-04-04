@@ -15,7 +15,7 @@ typedef struct {
 
 si_hashmap_t *si_hashmap_new();
 
-void si_hashmap_free(_hashmap_t *map);
+void si_hashmap_free(si_hashmap_t *map);
 
 uint32_t si_hashmap_size(si_hashmap_t *map);
 

@@ -4,7 +4,7 @@ libraries = [
     'sys',
     'array',
     'ring',
-    'hashmap',
+    'hashmap'
 ]
 
 default_cflags = machine_args
@@ -40,14 +40,14 @@ foreach l:libraries
         if not build
             break
         endif
-        static_deps += [get_variable('static_dfe_' + d)]
+        static_deps += [get_variable('static_si_' + d)]
     endforeach
 
     enabled_libs += name
     install_headers(headers)
     install_headers(indirect_headers)
 
-    libname = 'dfe_' + name
+    libname = 'si_' + name
     includes += include_directories(l)
 
     # first build static lib
@@ -62,9 +62,9 @@ foreach l:libraries
             include_directories: includes,
             dependencies: static_deps)
 
-    dfe_static_libraries = [static_lib] + dfe_static_libraries
+    si_static_libraries = [static_lib] + si_static_libraries
 
-    set_variable('static_dfe_' + name, static_dep)
+    set_variable('static_si_' + name, static_dep)
     if debug_mode
         message('lib/@0@: Defining dependency "@1@"'.format(l, name))
     endif
