@@ -40,6 +40,7 @@ elf_link_t *elf_link_new()
 	elf_link->hook_func = false;
 	elf_link->dynamic_link = true;
 	elf_link->direct_call_optimize = false;
+	elf_link->delete_symbol_version = true;
 
 	// out file not create
 	elf_link->out_ef.fd = -1;
@@ -89,7 +90,9 @@ void copy_elf_file(elf_file_t *in, off_t in_offset, elf_file_t *out, off_t out_o
 	(void)memcpy(dest, src, len);
 }
 
+// .interp is needed by dyn-mode, staitc-mode template do not have
 static char *needed_sections[] = {
+    ".interp",
     ".note.gnu.build-id",
     ".note.ABI-tag",
     ".gnu.hash",
@@ -115,7 +118,7 @@ static char *needed_sections[] = {
 };
 #define NEEDED_SECTIONS_LEN (sizeof(needed_sections) / sizeof(needed_sections[0]))
 
-static bool is_section_needed(elf_file_t *ef, Elf64_Shdr *sec)
+static bool is_section_needed(elf_link_t *elf_link, elf_file_t *ef, Elf64_Shdr *sec)
 {
 	char *name = elf_get_section_name(ef, sec);
 
@@ -124,9 +127,17 @@ static bool is_section_needed(elf_file_t *ef, Elf64_Shdr *sec)
 			return true;
 	}
 
+	if (elf_link->delete_symbol_version == false) {
+		if (!strcmp(name, ".gnu.version"))
+			return true;
+		if (!strcmp(name, ".gnu.version_r"))
+			return true;
+	}
+
 	return false;
 
-	/* below is original implementation, don't have any effect now */
+	/*
+	TODO: below is original implementation, don't have any effect now
 	if ((sec->sh_type == SHT_RELA) && (!(sec->sh_flags & SHF_ALLOC)))
 		return false;
 	// TODO: fix symbol version
@@ -137,6 +148,7 @@ static bool is_section_needed(elf_file_t *ef, Elf64_Shdr *sec)
 		return false;
 
 	return true;
+	*/
 }
 
 static void copy_old_sections(elf_link_t *elf_link)
@@ -151,7 +163,7 @@ static void copy_old_sections(elf_link_t *elf_link)
 	j = 0;
 	for (i = 0; i < count; i++) {
 		/* keep 0th section and other sections we need */
-		if (i && !is_section_needed(template_ef, &src_sec[i]))
+		if (i && !is_section_needed(elf_link, template_ef, &src_sec[i]))
 			continue;
 		(void)memcpy((void *)&elf_link->out_ef.sechdrs[j], (void *)&src_sec[i], sizeof(Elf64_Shdr));
 		append_obj_mapping(elf_link, template_ef, NULL, (void *)&src_sec[i],
@@ -394,15 +406,24 @@ static void modify_section_link(elf_link_t *elf_link)
 		sec = &elf_link->out_ef.sechdrs[i];
 		if (sec->sh_link != 0 && (int)sec->sh_link < count) {
 			find_sec = find_tmp_section_by_src(elf_link, &src_sec[sec->sh_link]);
+			if (find_sec == NULL)
+				si_panic("find sec fail\n");
 			sec->sh_link = find_sec - elf_link->out_ef.sechdrs;
 		}
 		if (sec->sh_info != 0 && (int)sec->sh_info < count) {
 			find_sec = find_tmp_section_by_src(elf_link, &src_sec[sec->sh_info]);
+			if (find_sec == NULL) {
+				// when .plt merge to .text, can not find .plt
+				sec->sh_info = 0;
+				continue;
+			}
 			sec->sh_info = find_sec - elf_link->out_ef.sechdrs;
 		}
 	}
 
 	find_sec = find_tmp_section_by_name(elf_link, ".shstrtab");
+	if (find_sec == NULL)
+		si_panic("find sec .shstrtab fail\n");
 	elf_link->out_ef.hdr->e_shstrndx = find_sec - elf_link->out_ef.sechdrs;
 }
 
@@ -524,7 +545,7 @@ static void write_first_LOAD_segment(elf_link_t *elf_link)
 	if (tmp_sec)
 		elf_link->out_ef.dynstr_data = (char *)elf_link->out_ef.hdr + tmp_sec->sh_offset;
 
-	// write at end of fist segment
+	// write at end of first segment
 	if (elf_link->hook_func) {
 		write_so_path_struct(elf_link);
 	}
@@ -815,6 +836,12 @@ static int dynamic_copy_obj(elf_link_t *elf_link, Elf64_Dyn *begin_dyn, int len)
 			// fix name index
 			new_d_val = get_new_name_offset(elf_link, ef, ef->dynstr_sec, dyn->d_un.d_val);
 			break;
+		case DT_VERNEED:
+		case DT_VERSYM:
+			if (elf_link->delete_symbol_version) {
+				continue;
+			}
+			fallthrough;
 		case DT_INIT:
 		case DT_FINI:
 		case DT_GNU_HASH:
@@ -840,11 +867,6 @@ static int dynamic_copy_obj(elf_link_t *elf_link, Elf64_Dyn *begin_dyn, int len)
 			sec = find_tmp_section_by_name(elf_link, ".dynstr");
 			new_d_val = sec->sh_size;
 			break;
-		case DT_VERNEED:
-		case DT_VERNEEDNUM:
-		case DT_VERSYM:
-			// TODO: fix symbol version
-			continue;
 		case DT_INIT_ARRAY:
 			sec = find_tmp_section_by_name(elf_link, ".init_array");
 			new_d_val = sec->sh_addr;
@@ -861,6 +883,12 @@ static int dynamic_copy_obj(elf_link_t *elf_link, Elf64_Dyn *begin_dyn, int len)
 			sec = find_tmp_section_by_name(elf_link, ".fini_array");
 			new_d_val = sec->sh_size;
 			break;
+		case DT_VERNEEDNUM:
+			if (elf_link->delete_symbol_version) {
+				continue;
+			}
+			// TODO: symbol version DT_VERNEEDNUM
+			fallthrough;
 		default:
 			*dst_dyn = *dyn;
 			dst_dyn++;
@@ -946,7 +974,7 @@ static inline Elf64_Addr get_symbol_new_value(elf_link_t *elf_link, elf_file_t *
 	// _DYNAMIC is the the start of .dynamic
 	// _GLOBAL_OFFSET_TABLE_ is ok if compiled with -znow
 	if (sym->st_shndx == SHN_ABS) {
-		if (!strcmp("_DYNAMIC", name))
+		if (elf_is_same_symbol_name("_DYNAMIC", name))
 			return elf_link->out_ef.dynamic_Phdr->p_vaddr;
 	}
 
@@ -958,7 +986,7 @@ static inline Elf64_Addr get_symbol_new_value(elf_link_t *elf_link, elf_file_t *
 	 * __stop___libc_atexit is on the boundary of __libc_atexit and .bss,
 	 * treat it specially.
 	 */
-	if (!strcmp(name, "__stop___libc_atexit")) {
+	if (elf_is_same_symbol_name(name, "__stop___libc_atexit")) {
 		Elf64_Shdr *sec = elf_find_section_by_name(ef, "__libc_atexit");
 		if (sec == NULL) {
 			si_panic("elf_find_section_by_name fail: __libc_atexit\n");
@@ -1029,7 +1057,7 @@ static Elf64_Sym *find_defined_symbol(elf_file_t *ef, Elf64_Shdr *sec, char *sym
 			continue;
 		}
 		char *name = elf_get_dynsym_name(ef, dst_sym);
-		if (strcmp(sym_name, name) == 0) {
+		if (elf_is_same_symbol_name(sym_name, name)) {
 			return dst_sym;
 		}
 	}
@@ -1276,7 +1304,7 @@ static void elf_link_write_sections(elf_link_t *elf_link)
 	// .shstrtab
 	write_shstrtab(elf_link);
 
-	/*
+	/* 
 	 * .comment is useless, it's used to hold comments about the generated ELF
 	 * (details such as compiler version and execution platform).
 	 */
@@ -1301,7 +1329,7 @@ void elf_link_write(elf_link_t *elf_link)
 		modify_INTERP_segment(elf_link);
 	}
 
-	/*
+	/* 
 	 * Notes segment is not processed.
 	 * ELF notes allow for appending arbitrary information for the system to use.
 	 * For example, the GNU tool chain uses ELF notes to pass

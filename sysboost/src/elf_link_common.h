@@ -14,10 +14,11 @@
 #define SKIP_ONE_RELA (1)
 #define SKIP_TWO_RELA (2)
 #define SKIP_THREE_RELA (3)
-#define NEED_CLEAR_RELA (-2)
 
 #define MAX_ELF_FILE 512
 #define MAX_ELF_SECTION 128
+
+#define LIBHOOK "libhook.so"
 
 typedef struct {
 	elf_file_t in_efs[MAX_ELF_FILE];
@@ -35,6 +36,7 @@ typedef struct {
 	unsigned int next_mem_addr;
 	unsigned int next_file_offset;
 
+	bool delete_symbol_version;
 	bool direct_call_optimize;
 	bool dynamic_link;
 	// use libhook func to hook libc
@@ -145,6 +147,8 @@ Elf64_Shdr *find_tmp_section_by_src(elf_link_t *elf_link, Elf64_Shdr *shdr);
 unsigned long find_sym_old_addr(elf_file_t *ef, char *sym_name);
 unsigned long get_new_addr_by_sym(elf_link_t *elf_link, elf_file_t *ef, Elf64_Sym *sym);
 unsigned long get_new_addr_by_dynsym(elf_link_t *elf_link, elf_file_t *ef, Elf64_Sym *sym);
+
+int get_new_sym_index_no_clear(elf_link_t *elf_link, elf_file_t *src_ef, unsigned int old_index);
 int get_new_sym_index(elf_link_t *elf_link, elf_file_t *src_ef, unsigned int old_index);
 
 void show_sec_mapping(elf_link_t *elf_link);

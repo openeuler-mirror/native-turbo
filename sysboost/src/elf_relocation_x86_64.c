@@ -11,6 +11,7 @@
 
 #include "elf_link_common.h"
 #include "si_debug.h"
+#include "si_log.h"
 
 #define BYTES_NOP1 0x90
 
@@ -209,7 +210,7 @@ int modify_local_call_rela(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rel
 		if (sym->st_shndx == SHN_UNDEF) {
 			modify_insn_func_offset(elf_link, ef, rela, sym);
 		}
-		// local func call used offset in same sectioni, do nothing
+		// local func call used offset in same section, do nothing
 		// e8 4d 02 00 00          call   200330 <run_b>
 		break;
 	case R_X86_64_GOTPCRELX:
@@ -241,7 +242,7 @@ int modify_local_call_rela(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rel
 		// direct value, data is already write
 		break;
 	default:
-		SI_LOG_INFO("modify_local_call_rela: invalid type %2d r_offset %016lx r_addend %016lx sym_index %4d",
+		SI_LOG_INFO("invalid type %2d r_offset %016lx r_addend %016lx sym_index %4d",
 			    (int)ELF64_R_TYPE(rela->r_info), rela->r_offset, rela->r_addend, (int)ELF64_R_SYM(rela->r_info));
 		SI_LOG_INFO(" st_value %016lx\n", sym->st_value);
 		si_panic("invalid type\n");
@@ -249,6 +250,12 @@ int modify_local_call_rela(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rel
 	}
 
 	return 0;
+}
+
+static void clear_rela(Elf64_Rela *dst_rela)
+{
+	(void)memset(dst_rela, 0, sizeof(*dst_rela));
+	// TODO: R_X86_64_NONE can not in .rela.plt
 }
 
 void modify_rela_plt(elf_link_t *elf_link, si_array_t *arr)
@@ -259,7 +266,10 @@ void modify_rela_plt(elf_link_t *elf_link, si_array_t *arr)
 	Elf64_Rela *src_rela = NULL;
 	Elf64_Rela *dst_rela = NULL;
 	elf_file_t *out_ef = &elf_link->out_ef;
-	Elf64_Shdr *find_sec = find_tmp_section_by_name(elf_link, ".plt");
+
+	elf_file_t *template_ef = get_template_ef(elf_link);
+	Elf64_Shdr *find_sec = elf_find_section_by_name(template_ef, ".plt");
+	unsigned long new_plt_start_addr = get_new_addr_by_old_addr(elf_link, template_ef, find_sec->sh_offset);
 
 	for (int i = 0; i < len; i++) {
 		obj_rel = &obj_rels[i];
@@ -268,16 +278,20 @@ void modify_rela_plt(elf_link_t *elf_link, si_array_t *arr)
 
 		// old sym index to new index of .dynsym
 		unsigned int old_index = ELF64_R_SYM(src_rela->r_info);
-		int new_index = get_new_sym_index(elf_link, obj_rel->src_ef, old_index);
+		int new_index = get_new_sym_index_no_clear(elf_link, obj_rel->src_ef, old_index);
 		// func in this ELF need clear rela
 		if (new_index == NEED_CLEAR_RELA) {
-			(void)memset(dst_rela, 0, sizeof(*dst_rela));
+			clear_rela(dst_rela);
 			continue;
 		}
 		dst_rela->r_info = ELF64_R_INFO(new_index, ELF64_R_TYPE(src_rela->r_info));
 
 		// old got addr to new addr
 		dst_rela->r_offset = get_new_addr_by_old_addr(elf_link, obj_rel->src_ef, src_rela->r_offset);
+
+		SI_LOG_DEBUG("old r_offset %016lx r_info %016lx r_addend %016lx -> new r_offset %016lx r_info %016lx r_addend %016lx\n",
+				src_rela->r_offset, src_rela->r_info, src_rela->r_addend,
+				dst_rela->r_offset, dst_rela->r_info, dst_rela->r_addend);
 
 		// got[n+2] is plt next insn
 		unsigned long old_plt_addr = elf_read_u64(out_ef, (unsigned long)dst_rela->r_offset);
@@ -294,8 +308,17 @@ void modify_rela_plt(elf_link_t *elf_link, si_array_t *arr)
 		elf_write_value(out_ef, new_plt_addr + 1, &i, sizeof(unsigned int));
 		// relative jump to begin of .plt
 		// pushq has 5 Byte, jmpq has 1 Byte cmd
-		elf_write_jmp_addr(out_ef, new_plt_addr + 6, find_sec->sh_offset);
+		elf_write_jmp_addr(out_ef, new_plt_addr + 6, new_plt_start_addr);
 	}
+
+	if (elf_link->dynamic_link == false)
+		return;
+
+	// TODO: change addr for lazy lookup sym, this time not support lazy
+	// 0000000000001020 <.plt>:
+	//    1020:	ff 35 e2 2f 00 00    	pushq  0x2fe2(%rip)        # 4008 <_GLOBAL_OFFSET_TABLE_+0x8>
+	//    1026:	ff 25 e4 2f 00 00    	jmpq   *0x2fe4(%rip)        # 4010 <_GLOBAL_OFFSET_TABLE_+0x10>
+	//    102c:	0f 1f 40 00          	nopl   0x0(%rax)
 }
 
 void modify_plt_got(elf_link_t *elf_link)
@@ -313,4 +336,9 @@ void modify_plt_got(elf_link_t *elf_link)
 	// insn have 2 op code, direct value have 4 Byte
 	loc = loc + 2;
 	modify_insn_data_offset(elf_link, ef, loc, -4);
+}
+
+void correct_stop_libc_atexit(elf_link_t *elf_link)
+{
+	(void)elf_link;
 }

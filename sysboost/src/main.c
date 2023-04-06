@@ -15,8 +15,6 @@
 #include "si_debug.h"
 #include "si_log.h"
 
-#define LIBHOOK "libhook.so"
-
 int main(int argc, char *argv[])
 {
 	// TODO modify simple app's init and fini's first functions.

@@ -42,7 +42,7 @@ endif
 
 machine_args = ['-Wall', '-Werror', '-Wextra', '-Wformat', '-g', '-D_GNU_SOURCE',
                 '-fno-jump-tables', '-Wl,-z,relro,-z,now', '-Bsymbolic', '-zcommon-page-size=2097152', '-zmax-page-size=2097152']
-lk_args = ['-Wl,--emit-relocs']
+lk_args = ['-Wl,--emit-relocs', '-Wl,-z,relro,-z,now']
 
 global_inc = include_directories('.',
     'lib/sys/include',

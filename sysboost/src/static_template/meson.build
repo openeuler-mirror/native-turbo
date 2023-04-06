@@ -8,5 +8,6 @@ temp_cflags = ['-O0', '-Wall', '-Wextra', '-Wformat', '-g', '-D_GNU_SOURCE', '-f
             '-O', '-D_FORTIFY_SOURCE=2', '-export-dynamic']
 
 executable('static_template', sources,
+        install: true,
         c_args: temp_cflags,
-        link_args: temp_cflags + ['-Wl,--emit-relocs'])
+        link_args: temp_cflags + ['-Wl,--emit-relocs', '-ldl'])

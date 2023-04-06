@@ -34,9 +34,82 @@ static void check_data_section_addr(elf_file_t *out_ef)
 	}
 }
 
+static char *special_dynsyms[] = {
+    "_ITM_deregisterTMCloneTable",
+    "__cxa_finalize",
+    "__gmon_start__",
+    "_ITM_registerTMCloneTable",
+};
+#define SPECIAL_DYNSYMS_LEN (sizeof(special_dynsyms) / sizeof(special_dynsyms[0]))
+
+static bool is_dynsym_valid(Elf64_Sym *sym, const char *name)
+{
+	// some special symbols are ok even if they are undefined, skip them
+	for (unsigned i = 0; i < SPECIAL_DYNSYMS_LEN; i++) {
+		if (elf_is_same_symbol_name(name, special_dynsyms[i]))
+			return true;
+	}
+
+	if (sym->st_shndx == SHN_UNDEF)
+		return false;
+
+	return true;
+}
+
+static void check_rela_dyn(elf_link_t *elf_link)
+{
+	if (elf_link->dynamic_link) {
+		return;
+	}
+
+	// static mode only some dynsym can be UND
+	elf_file_t *out_ef = &elf_link->out_ef;
+	Elf64_Shdr *sec = elf_find_section_by_name(out_ef, ".rela.dyn");
+	int len = sec->sh_size / sec->sh_entsize;
+	Elf64_Rela *relas = (void *)out_ef->hdr + sec->sh_offset;
+	Elf64_Rela *rela = NULL;
+
+	for (int i = 0; i < len; i++) {
+		rela = &relas[i];
+		if (ELF64_R_SYM(rela->r_info) == 0) {
+			continue;
+		}
+		Elf64_Sym *sym = elf_get_dynsym_by_rela(out_ef, rela);
+		const char *sym_name = elf_get_dynsym_name(out_ef, sym);
+		if (is_dynsym_valid(sym, sym_name) == false) {
+			si_panic("%s is UND\n", sym_name);
+		}
+	}
+}
+
+static void check_dynamic(elf_link_t *elf_link)
+{
+	Elf64_Dyn *dyn_arr = NULL;
+	Elf64_Dyn *dyn = NULL;
+	int dyn_count = 0;
+	elf_file_t *out_ef = &elf_link->out_ef;
+	Elf64_Shdr *sec = elf_find_section_by_name(out_ef, ".dynamic");
+
+	if (elf_link->dynamic_link == false)
+		return;
+
+	// dyn mode must be DT_BIND_NOW
+	dyn_count = sec->sh_size / sec->sh_entsize;
+	dyn_arr = ((void *)out_ef->hdr) + sec->sh_offset;
+	for (int i = 0; i < dyn_count; i++) {
+		dyn = &dyn_arr[i];
+		if (dyn->d_tag == DT_BIND_NOW) {
+			return;
+		}
+	}
+	si_panic("DT_BIND_NOW is needed\n");
+}
+
 void elf_check_elf(elf_link_t *elf_link)
 {
 	elf_file_t *out_ef = &elf_link->out_ef;
 	check_bss_addr(out_ef);
 	check_data_section_addr(out_ef);
+	check_rela_dyn(elf_link);
+	check_dynamic(elf_link);
 }

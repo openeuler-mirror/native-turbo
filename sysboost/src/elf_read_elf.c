@@ -18,6 +18,60 @@
 
 #define DEBUG_SEC_PRE_NAME ".debug_"
 
+// cmp symbol name without sym version
+bool elf_is_same_symbol_name(const char *a, const char *b)
+{
+	if (a == NULL || b == NULL)
+		return false;
+
+	while (*a != '\0' && *a != '@' && *b != '\0' && *b != '@') {
+		if (*a != *b)
+			return false;
+
+		a++;
+		b++;
+	}
+
+	if (*a != '\0' && *a != '@')
+		return false;
+	if (*b != '\0' && *b != '@')
+		return false;
+
+	return true;
+}
+
+int find_dynsym_index_by_name(elf_file_t *ef, const char *name, bool clear)
+{
+	Elf64_Sym *syms = (Elf64_Sym *)(((void *)ef->hdr) + ef->dynsym_sec->sh_offset);
+	int count = ef->dynsym_sec->sh_size / sizeof(Elf64_Sym);
+	int found_index = -1;
+
+	Elf64_Sym *sym = NULL;
+	char *sym_name = NULL;
+	for (int i = 0; i < count; i++) {
+		sym = &syms[i];
+		sym_name = elf_get_dynsym_name(ef, sym);
+		if (elf_is_same_symbol_name(sym_name, name)) {
+			if (clear && sym->st_shndx != 0) {
+				return NEED_CLEAR_RELA;
+			}
+			found_index = i;
+			break;
+		}
+	}
+
+	if (found_index == -1)
+		si_panic("fail\n");
+
+	return found_index;
+}
+
+char *get_sym_name_dynsym(elf_file_t *ef, unsigned int index)
+{
+	Elf64_Sym *syms = (Elf64_Sym *)(((void *)ef->hdr) + ef->dynsym_sec->sh_offset);
+	return elf_get_dynsym_name(ef, &syms[index]);
+}
+
 int elf_find_func_range_by_name(elf_file_t *ef, const char *func_name,
 				unsigned long *start, unsigned long *end)
 {
@@ -53,7 +107,7 @@ unsigned elf_find_symbol_index_by_name(elf_file_t *ef, const char *name)
 		Elf64_Sym *sym = &syms[i];
 		char *sym_name = elf_get_symbol_name(ef, sym);
 		SI_LOG_DEBUG("%s %s\n", name, sym_name);
-		if (strcmp(sym_name, name) == 0)
+		if (elf_is_same_symbol_name(sym_name, name))
 			return i;
 	}
 

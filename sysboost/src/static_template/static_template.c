@@ -40,13 +40,14 @@
 #define ADDR1 ((void *)0XDEAD01)
 #define ADDR2 ((void *)0XDEAD02)
 
+#ifdef __aarch64__
 #define NO_COMPILE_OPTIMIZE(func_str) asm volatile("BL " func_str)
-
-extern uintptr_t __stack_chk_guard;
+#else
+#define NO_COMPILE_OPTIMIZE(func_str) asm volatile("jmp " func_str)
+#endif
 
 int main(void)
 {
-	(void)__builtin_expect(__stack_chk_guard != 0, 0);
 	// gcc compile optimization will delete some code, we need use random len
 	char buf[128] = {0};
 	(void)getrandom(buf, sizeof(buf), 0);
@@ -66,15 +67,15 @@ int main(void)
 	// iswupper(), iswalnum(), strchrnul(), strstr(), towlower(), iswlower() is already in the template ELF
 
 	// wctob, wcsncmp, mbrlen, mbsinit, strchr, strrchr, strcasestr, printf have been  optimized, so they're decorated with asm.
-	asm volatile("BL wctob");
-	asm volatile("BL wcsncmp");
-	asm volatile("BL mbrlen");
-	asm volatile("BL mbsinit");
-	asm volatile("BL strchr");
-	asm volatile("BL strrchr");
-	asm volatile("BL strcasestr");
-	asm volatile("BL printf");
-	asm volatile("BL imaxdiv");
+	NO_COMPILE_OPTIMIZE("wctob");
+	NO_COMPILE_OPTIMIZE("wcsncmp");
+	NO_COMPILE_OPTIMIZE("mbrlen");
+	NO_COMPILE_OPTIMIZE("mbsinit");
+	NO_COMPILE_OPTIMIZE("strchr");
+	NO_COMPILE_OPTIMIZE("strrchr");
+	NO_COMPILE_OPTIMIZE("strcasestr");
+	NO_COMPILE_OPTIMIZE("printf");
+	NO_COMPILE_OPTIMIZE("imaxdiv");
 	NO_COMPILE_OPTIMIZE("__sprintf_chk");
 	NO_COMPILE_OPTIMIZE("__errno_location");
 	NO_COMPILE_OPTIMIZE("__snprintf_chk");
@@ -101,9 +102,12 @@ int main(void)
 	NO_COMPILE_OPTIMIZE("sigfillset");
 	NO_COMPILE_OPTIMIZE("siglongjmp");
 	NO_COMPILE_OPTIMIZE("vfprintf");
+
+#ifdef __aarch64__
 	// The __stack_chk_guard and __stack_chk_fail symbols are normally supplied by a GCC library called libssp
 	NO_COMPILE_OPTIMIZE("__stack_chk_guard");
 	NO_COMPILE_OPTIMIZE("__stack_chk_fail");
+#endif
 
 	setlocale(LC_ALL, "en_US.utf8");
 
