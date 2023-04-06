@@ -27,77 +27,6 @@
 #define MAX_INSN_OFFSET 2147483647L
 #define MIN_INSN_OFFSET -2147483648L
 
-static char *special_dynsyms[] = {
-    "_ITM_deregisterTMCloneTable",
-    "__cxa_finalize",
-    "__gmon_start__",
-    "_ITM_registerTMCloneTable",
-};
-#define SPECIAL_DYNSYMS_LEN (sizeof(special_dynsyms) / sizeof(special_dynsyms[0]))
-static bool is_dynsym_valid(Elf64_Sym *sym, const char *name)
-{
-	// some special symbols are ok even if they are undefined, skip them
-	for (unsigned i = 0; i < SPECIAL_DYNSYMS_LEN; i++) {
-		if (!strcmp(name, special_dynsyms[i]))
-			return true;
-	}
-
-	if (sym->st_shndx == SHN_UNDEF)
-		return false;
-
-	return true;
-}
-
-static int find_dynsym_index_by_name(elf_file_t *ef, const char *name, bool clear)
-{
-	Elf64_Sym *syms = (Elf64_Sym *)(((void *)ef->hdr) + ef->dynsym_sec->sh_offset);
-	int count = ef->dynsym_sec->sh_size / sizeof(Elf64_Sym);
-	int found_index = -1;
-
-	Elf64_Sym *sym = NULL;
-	char *sym_name = NULL;
-	for (int i = 0; i < count; i++) {
-		sym = &syms[i];
-		sym_name = elf_get_dynsym_name(ef, sym);
-		if (strcmp(sym_name, name) == 0) {
-			if (clear && sym->st_shndx != 0) {
-				return NEED_CLEAR_RELA;
-			}
-			found_index = i;
-			break;
-		}
-	}
-
-	if (found_index == -1)
-		si_panic("fail\n");
-
-	if (is_dynsym_valid(sym, sym_name) == false) {
-		si_panic("%s is UND\n", sym_name);
-	}
-
-	return found_index;
-}
-
-char *get_sym_name_dynsym(elf_file_t *ef, unsigned int index)
-{
-	Elf64_Sym *syms = (Elf64_Sym *)(((void *)ef->hdr) + ef->dynsym_sec->sh_offset);
-	return elf_get_dynsym_name(ef, &syms[index]);
-}
-
-int get_new_sym_index_no_clear(elf_link_t *elf_link, elf_file_t *src_ef, unsigned int old_index)
-{
-	const char *name = get_sym_name_dynsym(src_ef, old_index);
-
-	return find_dynsym_index_by_name(&elf_link->out_ef, name, false);
-}
-
-int get_new_sym_index(elf_link_t *elf_link, elf_file_t *src_ef, unsigned int old_index)
-{
-	const char *name = get_sym_name_dynsym(src_ef, old_index);
-
-	return find_dynsym_index_by_name(&elf_link->out_ef, name, true);
-}
-
 static void modify_local_call_sec(elf_link_t *elf_link, elf_file_t *ef, Elf64_Shdr *sec)
 {
 	char *name = NULL;
@@ -107,7 +36,7 @@ static void modify_local_call_sec(elf_link_t *elf_link, elf_file_t *ef, Elf64_Sh
 	int ret = 0;
 
 	name = elf_get_section_name(ef, sec);
-	SI_LOG_DEBUG("modify_local_call_sec: sec %s\n", name);
+	SI_LOG_DEBUG("sec %s\n", name);
 
 	for (int i = 0; i < len; i++) {
 		rela = &relas[i];
@@ -178,21 +107,17 @@ static void modify_rela_to_RELATIVE(elf_link_t *elf_link, elf_file_t *src_ef, El
 	// offset modify by caller
 }
 
-void modify_rela_dyn_item(elf_link_t *elf_link, elf_obj_mapping_t *obj_rel)
+void modify_rela_dyn_item(elf_link_t *elf_link, elf_file_t *src_ef, Elf64_Rela *src_rela, Elf64_Rela *dst_rela)
 {
-	Elf64_Rela *src_rela = NULL;
-	Elf64_Rela *dst_rela = NULL;
 	int type;
-	unsigned int old_index;
-	int new_index;
-
-	src_rela = obj_rel->src_obj;
-	dst_rela = obj_rel->dst_obj;
 
 	// modify offset
-	dst_rela->r_offset = get_new_addr_by_old_addr(elf_link, obj_rel->src_ef, src_rela->r_offset);
+	dst_rela->r_offset = get_new_addr_by_old_addr(elf_link, src_ef, src_rela->r_offset);
+	// old sym index to new index of .dynsym
+	unsigned int old_index = ELF64_R_SYM(src_rela->r_info);
+	int new_index = get_new_sym_index_no_clear(elf_link, src_ef, old_index);
+	dst_rela->r_info = ELF64_R_INFO(new_index, ELF64_R_TYPE(src_rela->r_info));
 
-	// modify index or relative addr
 	type = ELF64_R_TYPE(src_rela->r_info);
 	switch (type) {
 	case R_X86_64_GLOB_DAT:
@@ -202,8 +127,8 @@ void modify_rela_dyn_item(elf_link_t *elf_link, elf_obj_mapping_t *obj_rel)
 			// 00000000007fffe0  0000000f00000006 R_X86_64_GLOB_DAT      0000000000800008 ___g_so_path_list + 0
 			new_index = ELF64_R_SYM(dst_rela->r_info);
 			const char *sym_name = get_sym_name_dynsym(&elf_link->out_ef, new_index);
-			if (strcmp(sym_name, "___g_so_path_list") != 0) {
-				return;
+			if (elf_is_same_symbol_name(sym_name, "___g_so_path_list") == false) {
+				break;
 			}
 
 			// when ELF load, real addr will set
@@ -213,22 +138,16 @@ void modify_rela_dyn_item(elf_link_t *elf_link, elf_obj_mapping_t *obj_rel)
 		break;
 	case R_X86_64_RELATIVE:
 	case R_AARCH64_RELATIVE:
-		dst_rela->r_addend = get_new_addr_by_old_addr(elf_link, obj_rel->src_ef, src_rela->r_addend);
+		dst_rela->r_addend = get_new_addr_by_old_addr(elf_link, src_ef, src_rela->r_addend);
 		break;
+	case R_X86_64_64:
 	case R_AARCH64_ABS64:
-		new_index = get_new_sym_index_no_clear(elf_link, obj_rel->src_ef, ELF64_R_SYM(src_rela->r_info));
-		dst_rela->r_info = ELF64_R_INFO(new_index, ELF64_R_TYPE(src_rela->r_info));
 		break;
 	case R_AARCH64_GLOB_DAT:
 		// some symbol do not export in .dynsym, change to R_AARCH64_RELATIVE
-		modify_rela_to_RELATIVE(elf_link, obj_rel->src_ef, src_rela, dst_rela);
+		modify_rela_to_RELATIVE(elf_link, src_ef, src_rela, dst_rela);
 		break;
 	case R_AARCH64_TLS_TPREL:
-		old_index = ELF64_R_SYM(src_rela->r_info);
-		new_index = 0;
-		if (old_index)
-			new_index = get_new_sym_index_no_clear(elf_link, obj_rel->src_ef, old_index);
-		dst_rela->r_info = ELF64_R_INFO(new_index, ELF64_R_TYPE(src_rela->r_info));
 		dst_rela->r_addend = src_rela->r_addend;
 		break;
 	case R_AARCH64_COPY:
@@ -238,8 +157,13 @@ void modify_rela_dyn_item(elf_link_t *elf_link, elf_obj_mapping_t *obj_rel)
 		/* nothing need to do */
 		break;
 	default:
-		si_panic("error not supported modify_rela_dyn type\n");
+		SI_LOG_ERR("%s %lx\n", src_ef->file_name, src_rela->r_offset);
+		si_panic("error not supported modify_rela_dyn type %d\n", type);
 	}
+
+	SI_LOG_DEBUG("old r_offset %016lx r_info %016lx r_addend %016lx -> new r_offset %016lx r_info %016lx r_addend %016lx\n",
+			src_rela->r_offset, src_rela->r_info, src_rela->r_addend,
+			dst_rela->r_offset, dst_rela->r_info, dst_rela->r_addend);
 }
 
 // .rela.dyn
@@ -251,7 +175,10 @@ void modify_rela_dyn(elf_link_t *elf_link)
 
 	for (int i = 0; i < len; i++) {
 		obj_rel = &obj_rels[i];
-		modify_rela_dyn_item(elf_link, obj_rel);
+		Elf64_Rela *src_rela = obj_rel->src_obj;
+		Elf64_Rela *dst_rela = obj_rel->dst_obj;
+		elf_file_t *src_ef = obj_rel->src_ef;
+		modify_rela_dyn_item(elf_link, src_ef, src_rela, dst_rela);
 	}
 }
 

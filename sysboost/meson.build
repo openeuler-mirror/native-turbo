@@ -49,8 +49,10 @@ foreach src:sysboosts
         endforeach
     else
         link_libs = si_static_libraries
+        cflags += ['-Og', '-g', '-fpic', '-pie']
         executable('sysboost', sources,
-                c_args: cflags + ['-O2', '-fpic', '-pie'],
+                install: true,
+                c_args: cflags,
                 link_args: ldflags,
                 link_whole: link_libs,
                 dependencies: ext_deps + dep_objs,

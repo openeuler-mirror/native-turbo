@@ -2,14 +2,10 @@
 
 sources = files('dlsym_hook.c')
 
-cflags += ['-O2', '-v', '-ldl']
+cflags += ['-O2', '-v']
+ldflags += ['-ldl']
 
 libhook = shared_library('hook', sources,
+    install: true,
     c_args: cflags,
     link_args: ldflags)
-
-# Add a custom target for the format rule
-format = custom_target('format',
-    input: 'dlsym_hook.c',
-    output: 'dlsym_hook.c',
-    command: ['clang-format', '-i', '@INPUT@'])

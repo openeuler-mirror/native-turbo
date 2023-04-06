@@ -495,7 +495,7 @@ bool is_gmon_start_symbol(elf_file_t *ef, Elf64_Sym *sym)
 		return false;
 
 	char *name = elf_get_symbol_name(ef, sym);
-	if (!strcmp(name, "__gmon_start__")) {
+	if (elf_is_same_symbol_name(name, "__gmon_start__")) {
 		return true;
 	}
 	return false;
@@ -505,7 +505,7 @@ bool is_ehdr_start_symbol(elf_file_t *ef, Elf64_Sym *sym)
 {
 	// 1689: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT    1 __ehdr_start
 	char *name = elf_get_symbol_name(ef, sym);
-	if (!strcmp(name, "__ehdr_start")) {
+	if (elf_is_same_symbol_name(name, "__ehdr_start")) {
 		return true;
 	}
 	return false;
@@ -644,7 +644,7 @@ static void modify_branch_insn(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela 
 	}
 
 	char *name = elf_get_symbol_name(ef, sym);
-	if (unlikely(!strcmp(name, "main"))) {
+	if (unlikely(elf_is_same_symbol_name(name, "main"))) {
 		elf_file_t *main_ef = get_main_ef(elf_link);
 		old_sym_addr = find_sym_old_addr(main_ef, "main");
 		new_sym_addr = get_new_addr_by_old_addr(elf_link, main_ef, old_sym_addr);
@@ -653,7 +653,9 @@ static void modify_branch_insn(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela 
 
 	// Here is an inelegant optimization for bash that cancels all resource release procedures in the
 	// exit process, and directly calls the _Exit function to end the process.
-	if (!elf_link->dynamic_link && unlikely(!strcmp(name, "exit"))) {
+	// just change exit symbol in template ELF
+	elf_file_t *template_ef = get_template_ef(elf_link);
+	if (!elf_link->dynamic_link && template_ef == ef && unlikely(elf_is_same_symbol_name(name, "exit"))) {
 		old_sym_addr = find_sym_old_addr(ef, "_exit");
 		new_sym_addr = get_new_addr_by_old_addr(elf_link, ef, old_sym_addr);
 		goto out;
@@ -740,7 +742,7 @@ int modify_local_call_rela(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rel
 		return 0;
 	case R_AARCH64_LD64_GOT_LO12_NC:
 	case R_AARCH64_LD64_GOTPAGE_LO15:
-		// if a symbol in dynamic or data.rel.ro, but it is needed to find address by got, should skip it
+		//if a symbol in dynamic or data.rel.ro, but it is needed to find address by got, should skip it
 		return 0;
 	case R_AARCH64_TLSLE_ADD_TPREL_HI12:
 		return 0;
@@ -768,7 +770,7 @@ int modify_local_call_rela(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rel
 		modify_tls_ie(elf_link, ef, rela, sym);
 		return SKIP_ONE_RELA;
 	default:
-		si_panic("modify_local_call_rela: invalid type %d\n", (int)ELF64_R_TYPE(rela->r_info));
+		si_panic("invalid type %d\n", (int)ELF64_R_TYPE(rela->r_info));
 		return -1;
 	}
 

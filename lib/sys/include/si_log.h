@@ -7,14 +7,14 @@
 
 // Definition of log levels
 typedef enum LogLevel {
-	SI_LOG_LEVEL_EMERG = 1, /**< System is unusable.               */
-	SI_LOG_LEVEL_ALERT,	/**< Action must be taken immediately. */
-	SI_LOG_LEVEL_CRIT,	/**< Critical conditions.              */
-	SI_LOG_LEVEL_NOTICE,	/**< Normal but significant condition. */
-	SI_LOG_LEVEL_INFO,	/**< Informational.                    */
-	SI_LOG_LEVEL_WARNING,	/**< Warning conditions.               */
-	SI_LOG_LEVEL_ERR,	/**< Error conditions.                 */
-	SI_LOG_LEVEL_DEBUG,	/**< Debug-level messages.             */
+	SI_LOG_LEVEL_EMERG = 1,   /**< System is unusable.               */
+	SI_LOG_LEVEL_ALERT,   /**< Action must be taken immediately. */
+	SI_LOG_LEVEL_CRIT,    /**< Critical conditions.              */
+	SI_LOG_LEVEL_ERR,     /**< Error conditions.                 */
+	SI_LOG_LEVEL_WARNING, /**< Warning conditions.               */
+	SI_LOG_LEVEL_NOTICE,  /**< Normal but significant condition. */
+	SI_LOG_LEVEL_INFO,    /**< Informational.                    */
+	SI_LOG_LEVEL_DEBUG,   /**< Debug-level messages.             */
 } LogLevel;
 
 void si_log_set_global_level(uint32_t level);

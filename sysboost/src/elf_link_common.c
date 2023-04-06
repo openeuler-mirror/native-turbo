@@ -80,7 +80,7 @@ int get_new_section_index(elf_link_t *elf_link, elf_file_t *src_ef, unsigned int
 
 	sec_rel = elf_find_sec_mapping_by_srcsec(elf_link, src_sec);
 	if (sec_rel == NULL) {
-		// some sec like .gnu.version is no need in out ELF
+		// some sec is no need in out ELF
 		return 0;
 		// char *name = elf_get_section_name(src_ef, src_sec);
 		// printf("elf_find_sec_mapping_by_srcsec fail: file %s name %s src_sec %lx\n", src_ef->file_name, name, (unsigned long)src_sec);
@@ -291,21 +291,6 @@ unsigned long get_new_offset_by_old_offset(elf_link_t *elf_link, elf_file_t *src
 	return get_new_addr_by_old_addr(elf_link, src_ef, offset);
 }
 
-#define SYM_NAME_LEN_MAX 128U
-int remove_sym_name_suffix(char *name, char *new_name)
-{
-	char *p = strchr(name, '@');
-	if (!p)
-		return 0;
-
-	unsigned n = p - name;
-	if (n >= SYM_NAME_LEN_MAX)
-		si_panic("sym name too long\n");
-	memcpy(new_name, name, n);
-	new_name[n] = '\0';
-	return n + 1;
-}
-
 static unsigned long _get_ifunc_new_addr(elf_link_t *elf_link, char *sym_name);
 
 static unsigned long find_sym_new_addr(elf_link_t *elf_link, char *sym_name)
@@ -313,25 +298,6 @@ static unsigned long find_sym_new_addr(elf_link_t *elf_link, char *sym_name)
 	int count = elf_link->in_ef_nr;
 	elf_file_t *ef = NULL;
 	Elf64_Sym *sym = NULL;
-
-	char new_sym_name[SYM_NAME_LEN_MAX];
-	/* remove "@GLIBC xxx" in name, if have */
-	if (remove_sym_name_suffix(sym_name, new_sym_name))
-		sym_name = new_sym_name;
-
-	// jump hook func
-	if (elf_link->hook_func) {
-		// TODO: if in libhook do not hook it
-
-		if (!strcmp(sym_name, "dlopen")) {
-			sym_name = "___dlopen";
-			SI_LOG_INFO("find_sym_new_addr: dlopen\n");
-		} else if (!strcmp(sym_name, "dlclose")) {
-			sym_name = "___dlclose";
-		} else if (!strcmp(sym_name, "dlsym")) {
-			sym_name = "___dlsym";
-		}
-	}
 
 	// pubilc func sym is in dynsym
 	for (int i = 0; i < count; i++) {
@@ -341,7 +307,7 @@ static unsigned long find_sym_new_addr(elf_link_t *elf_link, char *sym_name)
 		for (int j = 0; j < sym_count; j++) {
 			sym = &syms[j];
 			char *name = elf_get_dynsym_name(ef, sym);
-			if (strcmp(sym_name, name) == 0 && sym->st_shndx != SHN_UNDEF)
+			if (elf_is_same_symbol_name(sym_name, name) && sym->st_shndx != SHN_UNDEF)
 				goto out;
 		}
 	}
@@ -354,12 +320,14 @@ static unsigned long find_sym_new_addr(elf_link_t *elf_link, char *sym_name)
 		for (int j = 0; j < sym_count; j++) {
 			sym = &syms[j];
 			char *name = elf_get_symbol_name(ef, sym);
-			if (strcmp(sym_name, name) == 0 && sym->st_shndx != SHN_UNDEF)
+			if (elf_is_same_symbol_name(sym_name, name) && sym->st_shndx != SHN_UNDEF)
 				goto out;
 		}
 	}
 
-	si_panic("not found symbol %s\n", sym_name);
+	if (elf_link->dynamic_link == false)
+		si_panic("not found symbol %s\n", sym_name);
+
 out:
 	if (ELF64_ST_TYPE(sym->st_info) == STT_GNU_IFUNC)
 		return _get_ifunc_new_addr(elf_link, sym_name);
@@ -384,7 +352,7 @@ static unsigned long _get_ifunc_new_addr(elf_link_t *elf_link, char *sym_name)
 	SI_LOG_DEBUG("ifunc to real func %s\n", sym_name);
 
 	for (unsigned i = 0; i < IFUNC_MAPPING_LEN; i++) {
-		if (!strcmp(sym_name, ifunc_mapping[i][0]))
+		if (elf_is_same_symbol_name(sym_name, ifunc_mapping[i][0]))
 			return find_sym_new_addr(elf_link, ifunc_mapping[i][1]);
 	}
 
@@ -399,11 +367,11 @@ unsigned long find_sym_old_addr(elf_file_t *ef, char *sym_name)
 	for (int j = 0; j < sym_count; j++) {
 		Elf64_Sym *sym = &syms[j];
 		char *name = elf_get_symbol_name(ef, sym);
-		if (strcmp(sym_name, name) == 0 && sym->st_shndx != SHN_UNDEF) {
+		if (elf_is_same_symbol_name(sym_name, name) && sym->st_shndx != SHN_UNDEF) {
 			return sym->st_value;
 		}
 	}
-	si_panic("can not find sym!\n");
+	si_panic("can not find sym, %s\n", sym_name);
 	return 0;
 }
 
@@ -431,6 +399,17 @@ static unsigned long _get_new_addr_by_sym(elf_link_t *elf_link, elf_file_t *ef,
 		sym_name = elf_get_dynsym_name(ef, sym);
 	} else {
 		sym_name = elf_get_symbol_name(ef, sym);
+	}
+
+	// jump hook func, in libhook do not hook it, use real func
+	if (elf_link->hook_func && (strcmp(LIBHOOK, si_basename(ef->file_name)) != 0)) {
+		if (elf_is_same_symbol_name(sym_name, "dlopen")) {
+			sym_name = "___dlopen";
+		} else if (elf_is_same_symbol_name(sym_name, "dlclose")) {
+			sym_name = "___dlclose";
+		} else if (elf_is_same_symbol_name(sym_name, "dlsym")) {
+			sym_name = "___dlsym";
+		}
 	}
 
 	// WEAK func is used by GNU debug, libc do not have that func
@@ -501,4 +480,24 @@ unsigned long get_new_name_offset(elf_link_t *elf_link, elf_file_t *src_ef, Elf6
 
 	si_panic("get_new_name_offset fail\n");
 	return 0;
+}
+
+int get_new_sym_index_no_clear(elf_link_t *elf_link, elf_file_t *src_ef, unsigned int old_index)
+{
+	if (old_index == 0)
+		return 0;
+
+	const char *name = get_sym_name_dynsym(src_ef, old_index);
+
+	return find_dynsym_index_by_name(&elf_link->out_ef, name, false);
+}
+
+int get_new_sym_index(elf_link_t *elf_link, elf_file_t *src_ef, unsigned int old_index)
+{
+	if (old_index == 0)
+		return 0;
+
+	const char *name = get_sym_name_dynsym(src_ef, old_index);
+
+	return find_dynsym_index_by_name(&elf_link->out_ef, name, true);
 }
