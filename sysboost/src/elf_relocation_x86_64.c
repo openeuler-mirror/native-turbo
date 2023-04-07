@@ -290,8 +290,8 @@ void modify_rela_plt(elf_link_t *elf_link, si_array_t *arr)
 		dst_rela->r_offset = get_new_addr_by_old_addr(elf_link, obj_rel->src_ef, src_rela->r_offset);
 
 		SI_LOG_DEBUG("old r_offset %016lx r_info %016lx r_addend %016lx -> new r_offset %016lx r_info %016lx r_addend %016lx\n",
-				src_rela->r_offset, src_rela->r_info, src_rela->r_addend,
-				dst_rela->r_offset, dst_rela->r_info, dst_rela->r_addend);
+			     src_rela->r_offset, src_rela->r_info, src_rela->r_addend,
+			     dst_rela->r_offset, dst_rela->r_info, dst_rela->r_addend);
 
 		// got[n+2] is plt next insn
 		unsigned long old_plt_addr = elf_read_u64(out_ef, (unsigned long)dst_rela->r_offset);
