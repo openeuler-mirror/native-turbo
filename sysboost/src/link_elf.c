@@ -509,15 +509,16 @@ static void modify_GNU_EH_FRAME_segment(elf_link_t *elf_link)
 
 static void write_so_path_struct(elf_link_t *elf_link)
 {
-	// write count of so path, do not big than 3 Byte, tail Byte set null
 	elf_file_t *ef;
 	int count = elf_link->in_ef_nr;
 
+	// write count of so path, do not big than 3 Byte, tail Byte set null
 	elf_link->so_path_struct = (unsigned long)write_elf_file(elf_link, &count, sizeof(int)) - ((unsigned long)elf_link->out_ef.hdr);
 	for (int i = 0; i < count; i++) {
 		ef = &elf_link->in_efs[i];
-		int len = strlen(ef->file_name);
-		write_elf_file(elf_link, ef->file_name, len + 1);
+		const char *filename = si_basename(ef->file_name);
+		int len = strlen(filename);
+		write_elf_file(elf_link, (void *)filename, len + 1);
 	}
 }
 

@@ -6,9 +6,13 @@ all:
 
 #meson compile -C build
 
-init:
+release:
 	rm -rf build
 	meson build
+
+debug:
+	rm -rf build
+	meson build --buildtype=debug
 
 test:
 	meson test -C build

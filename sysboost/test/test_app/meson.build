@@ -2,8 +2,8 @@
 sources = files(['common_func.c',
 	'test_app.c'])
 
-cflags += ['-O2', '-fpic', '-pthread', '-ldl']
-ldflags += ['-pie']
+cflags += ['-fpic', '-pthread', '-ldl']
+ldflags += ['-pie', '-ldl']
 
 # Add a target for libutil2.so shared library
 util1 = shared_library('util1', 'util1.c',
@@ -30,5 +30,6 @@ executable('test_app', sources,
         c_args: cflags,
         link_args: ldflags,
         link_whole: link_libs,
+        build_rpath : './',
         dependencies: test_app_dep,
         include_directories: includes)

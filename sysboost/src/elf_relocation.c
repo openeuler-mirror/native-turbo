@@ -123,8 +123,13 @@ void modify_rela_dyn_item(elf_link_t *elf_link, elf_file_t *src_ef, Elf64_Rela *
 	case R_X86_64_GLOB_DAT:
 		// set addr of so path list
 		if (elf_link->hook_func) {
+			// .got var point to ___g_so_path_list data area, change point to real addr
 			// .rela.dyn
-			// 00000000007fffe0  0000000f00000006 R_X86_64_GLOB_DAT      0000000000800008 ___g_so_path_list + 0
+			// 0000000000003ff0  0000003000000006 R_X86_64_GLOB_DAT      0000000000004000 ___g_so_path_list + 0
+			// .rela.text
+			// 000000000000129d  0000006e0000002a R_X86_64_REX_GOTPCRELX 0000000000004000 ___g_so_path_list - 4
+			// 129a:	4c 8b 2d 4f 2d 00 00 	mov    0x2d4f(%rip),%r13        # 3ff0 <___g_so_path_list@@Base-0x10>
+			// 48: 0000000000004000  4096 OBJECT  GLOBAL DEFAULT   27 ___g_so_path_list
 			new_index = ELF64_R_SYM(dst_rela->r_info);
 			const char *sym_name = get_sym_name_dynsym(&elf_link->out_ef, new_index);
 			if (elf_is_same_symbol_name(sym_name, "___g_so_path_list") == false) {
@@ -162,8 +167,8 @@ void modify_rela_dyn_item(elf_link_t *elf_link, elf_file_t *src_ef, Elf64_Rela *
 	}
 
 	SI_LOG_DEBUG("old r_offset %016lx r_info %016lx r_addend %016lx -> new r_offset %016lx r_info %016lx r_addend %016lx\n",
-			src_rela->r_offset, src_rela->r_info, src_rela->r_addend,
-			dst_rela->r_offset, dst_rela->r_info, dst_rela->r_addend);
+		     src_rela->r_offset, src_rela->r_info, src_rela->r_addend,
+		     dst_rela->r_offset, dst_rela->r_info, dst_rela->r_addend);
 }
 
 // .rela.dyn

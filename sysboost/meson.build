@@ -7,6 +7,12 @@ sysboosts = [
 
 default_cflags = machine_args
 
+if get_option('buildtype').contains('debug')
+	default_cflags += [ '-pedantic', '-DPEDANTIC' ]
+else
+	default_cflags += [ '-UPEDANTIC' ]
+endif
+
 if cc.has_argument('-Wno-format-truncation')
 	default_cflags += '-Wno-format-truncation'
 endif
@@ -17,7 +23,7 @@ foreach src:sysboosts
     build = true
     sources = []
     includes = []
-    cflags = default_cflags
+    cflags = default_cflags + ['-Wno-pointer-arith', '-Wno-pedantic']
     ldflags = default_ldflags
     objs = []
     ext_deps = []
@@ -42,6 +48,12 @@ foreach src:sysboosts
 
     link_libs = []
 
+    if get_option('buildtype').contains('debug')
+    	cflags += ['-Og', '-g']
+    else
+    	cflags += ['-O2']
+    endif
+
     if src == 'test'
         foreach tt:tests
             path = join_paths(src, tt)
@@ -49,7 +61,7 @@ foreach src:sysboosts
         endforeach
     else
         link_libs = si_static_libraries
-        cflags += ['-Og', '-g', '-fpic', '-pie']
+        cflags += ['-fpic', '-pie']
         executable('sysboost', sources,
                 install: true,
                 c_args: cflags,

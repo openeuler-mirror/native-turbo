@@ -7,29 +7,28 @@
 #include <string.h>
 #include <strings.h>
 
+#include <si_common.h>
+
 #define MAIN_ELF_HANDLE ((void *)-4095)
 
-// so path list
-// put addr when merge so, change .data
-char *___g_so_path_list = (char *)0xDEAD;
+// ELF lib file name list, libs can not have same name
+// first 4 Byte is count, left space is strings
+// modify .got var point to poit real addr when merge lib.so
+// init MAGIC NUM for debug, here no need reserve more space
+char ___g_so_path_list[8] = {'D', 'E', 'A', 'D'};
 
 static bool is_so_in_merge_elf(const char *filename)
 {
-	// count ... path ... path ...
-	char tmp[PATH_MAX];
+	const char *tmp = NULL;
 	int count = *(int *)___g_so_path_list;
-	char *ret;
 
 	if (filename == NULL) {
 		return false;
 	}
 
-	ret = realpath(filename, tmp);
-	if (!ret)
-		printf("get realpath fail: %s\n", filename);
+	tmp = si_basename(filename);
 	char *so_path = ___g_so_path_list + sizeof(int);
 	for (int i = 0; i < count; i++) {
-		printf("is_so_in_merge_elf: %s -- %s\n", so_path, tmp);
 		if (strcmp(so_path, tmp) == 0) {
 			return true;
 		}
@@ -43,7 +42,6 @@ static bool is_so_in_merge_elf(const char *filename)
 void *___dlopen(const char *filename, int flags)
 {
 	if (is_so_in_merge_elf(filename)) {
-
 		return MAIN_ELF_HANDLE;
 	}
 
