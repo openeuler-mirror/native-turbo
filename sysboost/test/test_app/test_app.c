@@ -130,14 +130,14 @@ void test_dlsym(void)
 	test_dlsym_from_lib();
 }
 
-__attribute__((constructor)) void test_constructor_main(void)
+__attribute__((constructor)) void constructor_in_main_elf(void)
 {
-	printf("%s\n", __func__);
+	printf("... %s\n", __func__);
 }
 
-__attribute__((destructor)) void test_destructor_main(void)
+__attribute__((destructor)) void destructor_in_main_elf(void)
 {
-	printf("%s\n", __func__);
+	printf("... %s\n", __func__);
 }
 
 void test_IFUNC(void)

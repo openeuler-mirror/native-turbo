@@ -16,6 +16,7 @@ sources = files([
                   'elf_relocation_' + cpu_arch + '.c',
                   'elf_check_elf.c',
                   'elf_write_elf.c',
+                  'elf_daemon.c',
                 ])
 
 tools = [

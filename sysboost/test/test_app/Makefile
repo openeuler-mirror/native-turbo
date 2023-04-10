@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MulanPSL-2.0
 ROOT_DIR=../../../
 BUILD_DIR=$(ROOT_DIR)build/
-TEMPLATE_FILE=$(BUILD_DIR)sysboost/src/static_template/static_template
+TEMPLATE_FILE=$(BUILD_DIR)sysboost/src/static_template/sysboost_static_template
 SYSBOOST=$(BUILD_DIR)sysboost/sysboost
 TEST_APP=$(BUILD_DIR)sysboost/test/test_app/test_app
 LIB1=$(BUILD_DIR)sysboost/test/test_app/libutil1.so
@@ -11,11 +11,11 @@ LIBHOOK=$(BUILD_DIR)sysboost/src/libhook/libhook.so
 
 .PHONY: all
 
-all: test-d
+all: test-s
 
 static_template_debug:
-	readelf -W -a $(TEMPLATE_FILE) > static_template.elf
-	objdump -d $(TEMPLATE_FILE) > static_template.asm
+	readelf -W -a $(TEMPLATE_FILE) > sysboost_static_template.elf
+	objdump -d $(TEMPLATE_FILE) > sysboost_static_template.asm
 
 # DYN mod
 test-d:

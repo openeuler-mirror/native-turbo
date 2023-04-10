@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MulanPSL-2.0
 ROOT_DIR=../../../
 BUILD_DIR=$(ROOT_DIR)build/
-TEMPLATE_FILE=$(BUILD_DIR)sysboost/src/static_template/static_template
+TEMPLATE_FILE=$(BUILD_DIR)sysboost/src/static_template/sysboost_static_template
 SYSBOOST=$(BUILD_DIR)sysboost/sysboost
 
 .PHONY: all
@@ -9,8 +9,8 @@ SYSBOOST=$(BUILD_DIR)sysboost/sysboost
 all: bash
 
 static_template_debug:
-	readelf -W -a $(TEMPLATE_FILE) > static_template.elf
-	objdump -d $(TEMPLATE_FILE) > static_template.asm
+	readelf -W -a $(TEMPLATE_FILE) > sysboost_static_template.elf
+	objdump -d $(TEMPLATE_FILE) > sysboost_static_template.asm
 
 # simple test with template
 bash: static_template_debug
@@ -21,13 +21,13 @@ bash: static_template_debug
 	readelf -W -a bash.rto > bash.rto.elf
 	objdump -d bash.rto > bash.rto.asm
 	@echo ===run===
-	./bash.rto
+	./bash.rto -c "echo 1"
 
-gdb:
+rto:
 	gdb --args $(SYSBOOST) -static $(TEMPLATE_FILE) bash libtinfo.so
 
-gdb2:
-	gdb --args ./bash.rto
+run:
+	gdb --args ./bash.rto -c "echo 1"
 
 env:
 	echo 0 > /proc/sys/kernel/randomize_va_space
