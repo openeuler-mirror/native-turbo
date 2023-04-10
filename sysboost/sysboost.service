@@ -1,0 +1,11 @@
+[Unit]
+Description=Run sysboost for Kunpeng CPU
+Requires=sysboost.service
+After=sysboost.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sysboost -daemon
+
+[Install]
+WantedBy=multi-user.target

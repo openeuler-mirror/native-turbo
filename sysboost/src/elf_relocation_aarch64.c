@@ -369,6 +369,38 @@ static void modify_tls_ie(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rela
 		si_panic("modify_tls_ie find other symbol!\n");
 }
 
+static void fix_special_symbol_new_addr(elf_link_t *elf_link, elf_file_t *ef, Elf64_Sym *sym, unsigned long *new_addr)
+{
+	// template ELF .init_array is merge last one
+	// __init_array_start need set begin of .init_array addr
+	// __init_array_end need set end of .init_array addr
+	char *name = elf_get_symbol_name(ef, sym);
+	if (elf_is_same_symbol_name(name, "__init_array_start")) {
+		Elf64_Shdr *sec = find_tmp_section_by_name(elf_link, ".init_array");
+		*new_addr = sec->sh_addr;
+		SI_LOG_DEBUG("%s new addr %lx\n", name, *new_addr);
+		return;
+	}
+	if (elf_is_same_symbol_name(name, "__init_array_end")) {
+		Elf64_Shdr *sec = find_tmp_section_by_name(elf_link, ".init_array");
+		*new_addr = sec->sh_addr + sec->sh_size;
+		SI_LOG_DEBUG("%s new addr %lx\n", name, *new_addr);
+		return;
+	}
+	if (elf_is_same_symbol_name(name, "__fini_array_start")) {
+		Elf64_Shdr *sec = find_tmp_section_by_name(elf_link, ".fini_array");
+		*new_addr = sec->sh_addr;
+		SI_LOG_DEBUG("%s new addr %lx\n", name, *new_addr);
+		return;
+	}
+	if (elf_is_same_symbol_name(name, "__fini_array_end")) {
+		Elf64_Shdr *sec = find_tmp_section_by_name(elf_link, ".fini_array");
+		*new_addr = sec->sh_addr + sec->sh_size;
+		SI_LOG_DEBUG("%s new addr %lx\n", name, *new_addr);
+		return;
+	}
+}
+
 // modify_new_adrp, always change imm of adrp with keeping the offset unchanged
 // Example:
 // 7610:       90001fc1        adrp    x1, 3ff000 <tunable_list+0x730>
@@ -430,6 +462,9 @@ static void modify_new_adrp(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *re
 		old_sym_addr = sym->st_value + rela->r_addend;
 	}
 	new_sym_addr = get_new_addr_by_old_addr(elf_link, ef, old_sym_addr);
+
+	fix_special_symbol_new_addr(elf_link, ef, sym, &new_sym_addr);
+
 	unsigned long new_offset = get_new_addr_by_old_addr(elf_link, ef, old_offset);
 	elf_file_t *out_ef = &elf_link->out_ef;
 	// Generate a new insn based on the new immediate value
@@ -518,6 +553,11 @@ static void modify_new_special_insn(elf_link_t *elf_link, elf_file_t *ef, Elf64_
 	unsigned long old_addr = sym->st_value + rela->r_addend;
 	unsigned long new_offset = get_new_addr_by_old_addr(elf_link, ef, old_offset);
 	unsigned long new_addr = get_new_addr_by_old_addr(elf_link, ef, old_addr);
+
+	fix_special_symbol_new_addr(elf_link, ef, sym, &new_addr);
+
+	SI_LOG_DEBUG("offset %lx->%lx addr %lx->%lx\n", old_offset, new_offset, old_addr, new_addr);
+
 	unsigned opcode = old_insn & OPCODE_LDST_MASK;
 	unsigned long new_insn = 0;
 	switch (opcode) {
@@ -534,7 +574,7 @@ static void modify_new_special_insn(elf_link_t *elf_link, elf_file_t *ef, Elf64_
 		break;
 
 	default:
-		si_panic("modify_new_special_insn unsupported opcode 0x%lx\n", opcode);
+		si_panic("unsupported opcode 0x%lx\n", opcode);
 		break;
 	}
 	elf_file_t *out_ef = &elf_link->out_ef;
@@ -653,11 +693,10 @@ static void modify_branch_insn(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela 
 
 	// Here is an inelegant optimization for bash that cancels all resource release procedures in the
 	// exit process, and directly calls the _Exit function to end the process.
-	// just change exit symbol in template ELF
-	elf_file_t *template_ef = get_template_ef(elf_link);
-	if (!elf_link->dynamic_link && template_ef == ef && unlikely(elf_is_same_symbol_name(name, "exit"))) {
-		old_sym_addr = find_sym_old_addr(ef, "_exit");
-		new_sym_addr = get_new_addr_by_old_addr(elf_link, ef, old_sym_addr);
+	if (!elf_link->dynamic_link && unlikely(elf_is_same_symbol_name(name, "exit"))) {
+		elf_file_t *template_ef = get_template_ef(elf_link);
+		old_sym_addr = find_sym_old_addr(template_ef, "_exit");
+		new_sym_addr = get_new_addr_by_old_addr(elf_link, template_ef, old_sym_addr);
 		goto out;
 	}
 
@@ -671,7 +710,7 @@ out:
 	new_offset = get_new_addr_by_old_addr(elf_link, ef, old_offset);
 	new_insn = gen_branch_binary(old_insn, new_sym_addr, new_offset);
 	elf_write_u32(out_ef, new_offset, new_insn);
-	SI_LOG_DEBUG("modify_branch_insn offset %lx->%lx addr %lx->%lx\n", old_offset, new_offset, old_sym_addr, new_sym_addr);
+	SI_LOG_DEBUG("offset %lx->%lx addr %lx->%lx\n", old_offset, new_offset, old_sym_addr, new_sym_addr);
 }
 
 int modify_local_call_rela(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rela)
@@ -996,10 +1035,10 @@ void correct_stop_libc_atexit(elf_link_t *elf_link)
 			continue;
 		Elf64_Sym *sym = elf_find_symbol_by_name(out_ef, "__stop___libc_atexit");
 		rela->r_addend = sym->st_value;
-		SI_LOG_DEBUG("%s change .rela.dyn 0x%lx's value to 0x%lx\n",
-			     __func__, rela->r_offset, sym->st_value);
+		SI_LOG_DEBUG("change .rela.dyn 0x%lx's value to 0x%lx\n",
+			     rela->r_offset, sym->st_value);
 		found = true;
 	}
 	if (!found)
-		si_panic("%s, didn't find corresponding rela entry in .rela.dyn\n", __func__);
+		si_panic("didn't find corresponding rela entry in .rela.dyn\n");
 }

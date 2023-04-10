@@ -23,9 +23,8 @@ void si_dump_stack(void)
 	if (symb == NULL)
 		return;
 
-	while (size > 0) {
-		printf("%d: [%s]\n", size, symb[size - 1]);
-		size--;
+    for (int i = 0; i < size; i++)  {
+		printf("%d: [%s]\n", i, symb[i]);
 	}
 
 	free(symb);
