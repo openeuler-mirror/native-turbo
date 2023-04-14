@@ -298,28 +298,29 @@ static unsigned long find_sym_new_addr(elf_link_t *elf_link, char *sym_name)
 	int count = elf_link->in_ef_nr;
 	elf_file_t *ef = NULL;
 	Elf64_Sym *sym = NULL;
+        int sym_count;
+
+        // TODO: Refactoring is required to find its own symbol integration.
+        // The sequence of searching symbols is self, template, dynsym, and others
+        // Only the template file does not contain dynsym
+        ef = get_template_ef(elf_link);
+        sym_count = ef->symtab_sec->sh_size / sizeof(Elf64_Sym);
+        Elf64_Sym *syms = (Elf64_Sym *)(((void *)ef->hdr) + ef->symtab_sec->sh_offset);
+        for (int j = 0; j < sym_count; j++) {
+                sym = &syms[j];
+                char *name = elf_get_symbol_name(ef, sym);
+                if (elf_is_same_symbol_name(sym_name, name) && sym->st_shndx != SHN_UNDEF)
+                        goto out;
+        }
 
 	// pubilc func sym is in dynsym
 	for (int i = 0; i < count; i++) {
 		ef = &elf_link->in_efs[i];
-		int sym_count = ef->dynsym_sec->sh_size / sizeof(Elf64_Sym);
+		sym_count = ef->dynsym_sec->sh_size / sizeof(Elf64_Sym);
 		Elf64_Sym *syms = (Elf64_Sym *)(((void *)ef->hdr) + ef->dynsym_sec->sh_offset);
 		for (int j = 0; j < sym_count; j++) {
 			sym = &syms[j];
 			char *name = elf_get_dynsym_name(ef, sym);
-			if (elf_is_same_symbol_name(sym_name, name) && sym->st_shndx != SHN_UNDEF)
-				goto out;
-		}
-	}
-
-	// static mode some func no in dynsym, find from symtab
-	for (int i = 0; i < count; i++) {
-		ef = &elf_link->in_efs[i];
-		int sym_count = ef->symtab_sec->sh_size / sizeof(Elf64_Sym);
-		Elf64_Sym *syms = (Elf64_Sym *)(((void *)ef->hdr) + ef->symtab_sec->sh_offset);
-		for (int j = 0; j < sym_count; j++) {
-			sym = &syms[j];
-			char *name = elf_get_symbol_name(ef, sym);
 			if (elf_is_same_symbol_name(sym_name, name) && sym->st_shndx != SHN_UNDEF)
 				goto out;
 		}
@@ -404,11 +405,11 @@ static unsigned long _get_new_addr_by_sym(elf_link_t *elf_link, elf_file_t *ef,
 	// jump hook func, in libhook do not hook it, use real func
 	if (elf_link->hook_func && (strcmp(LIBHOOK, si_basename(ef->file_name)) != 0)) {
 		if (elf_is_same_symbol_name(sym_name, "dlopen")) {
-			sym_name = "___dlopen";
+			sym_name = "__hook_dlopen";
 		} else if (elf_is_same_symbol_name(sym_name, "dlclose")) {
-			sym_name = "___dlclose";
+			sym_name = "__hook_dlclose";
 		} else if (elf_is_same_symbol_name(sym_name, "dlsym")) {
-			sym_name = "___dlsym";
+			sym_name = "__hook_dlsym";
 		}
 	}
 

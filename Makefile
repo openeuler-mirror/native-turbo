@@ -29,7 +29,7 @@ static_template_debug:
 
 bash-test: static_template_debug
 	clear
-	./build/sysboost/sysboost -static ./build/sysboost/src/static_template/static_template bash/bash bash/libtinfo.so
+	./build/sysboost/sysboost -static ./build/sysboost/src/static_template/sysboost_static_template bash/bash bash/libtinfo.so
 	readelf -W -a bash.rto > bash.rto.elf
 	objdump -d bash.rto > bash.rto.asm
 
