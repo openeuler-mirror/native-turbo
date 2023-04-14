@@ -39,7 +39,7 @@ static bool is_so_in_merge_elf(const char *filename)
 	return false;
 }
 
-void *___dlopen(const char *filename, int flags)
+void *__hook_dlopen(const char *filename, int flags)
 {
 	if (is_so_in_merge_elf(filename)) {
 		return MAIN_ELF_HANDLE;
@@ -48,7 +48,7 @@ void *___dlopen(const char *filename, int flags)
 	return dlopen(filename, flags);
 }
 
-int ___dlclose(void *handle)
+int __hook_dlclose(void *handle)
 {
 	if (handle == MAIN_ELF_HANDLE) {
 		return 0;
@@ -57,7 +57,7 @@ int ___dlclose(void *handle)
 	return dlclose(handle);
 }
 
-void *___dlsym(void *handle, const char *symbol)
+void *__hook_dlsym(void *handle, const char *symbol)
 {
 	if (handle == MAIN_ELF_HANDLE) {
 		handle = RTLD_DEFAULT;

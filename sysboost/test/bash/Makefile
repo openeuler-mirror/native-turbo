@@ -29,8 +29,14 @@ rto:
 run:
 	gdb --args ./bash.rto -c "echo 1"
 
+run2:
+	gdb --args ./bash.rto
+
 env:
 	echo 0 > /proc/sys/kernel/randomize_va_space
 	cat /proc/sys/kernel/randomize_va_space
 	readelf -W -a bash > bash.elf
 	objdump -d bash > bash.asm
+
+install:
+	cp ./bash.rto /usr/bin/bash
