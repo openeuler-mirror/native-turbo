@@ -13,7 +13,7 @@
 #include "elf_hugepage.h"
 #include "elf_relocation.h"
 #include "elf_write_elf.h"
-#include "link_elf.h"
+#include "elf_link_elf.h"
 #include "si_array.h"
 #include "si_debug.h"
 #include "si_log.h"
@@ -31,6 +31,8 @@ elf_link_t *elf_link_new()
 
 	elf_link->out_ef.sechdrs = elf_link->tmp_sechdrs_buf;
 
+	elf_link->symbol_mapping_arr = si_array_new(sizeof(elf_symbol_mapping_t));
+
 	elf_link->sec_mapping_arr = si_array_new(sizeof(elf_sec_mapping_t));
 	elf_link->obj_mapping_arr = si_array_new(sizeof(elf_obj_mapping_t));
 
@@ -40,6 +42,7 @@ elf_link_t *elf_link_new()
 	elf_link->hook_func = false;
 	elf_link->dynamic_link = true;
 	elf_link->direct_call_optimize = false;
+	elf_link->direct_vdso_optimize = false;
 	elf_link->delete_symbol_version = true;
 
 	// out file not create
@@ -121,6 +124,12 @@ static char *needed_sections[] = {
 static bool is_section_needed(elf_link_t *elf_link, elf_file_t *ef, Elf64_Shdr *sec)
 {
 	char *name = elf_get_section_name(ef, sec);
+
+	// no use .plt, so delete .rela.plt
+	if (is_direct_call_optimize(elf_link) == true) {
+		if (!strcmp(name, ".rela.plt"))
+			return false;
+	}
 
 	for (unsigned i = 0; i < NEEDED_SECTIONS_LEN; i++) {
 		if (!strcmp(name, needed_sections[i]))
@@ -538,6 +547,10 @@ static void write_first_LOAD_segment(elf_link_t *elf_link)
 			break;
 		}
 		name = elf_get_tmp_section_name(elf_link, &sechdrs[i]);
+		if (is_direct_call_optimize(elf_link) == true) {
+			if (!strcmp(name, ".rela.plt"))
+				continue;
+		}
 		write_merge_section(elf_link, name);
 	}
 
@@ -849,7 +862,6 @@ static int dynamic_copy_obj(elf_link_t *elf_link, Elf64_Dyn *begin_dyn, int len)
 		case DT_STRTAB:
 		case DT_SYMTAB:
 		case DT_PLTGOT:
-		case DT_JMPREL:
 		case DT_RELA:
 			new_d_val = get_new_addr_by_old_addr(elf_link, ef, dyn->d_un.d_val);
 			break;
@@ -858,7 +870,24 @@ static int dynamic_copy_obj(elf_link_t *elf_link, Elf64_Dyn *begin_dyn, int len)
 			sec = find_tmp_section_by_name(elf_link, ".rela.dyn");
 			new_d_val = sec->sh_size;
 			break;
+		case DT_JMPREL:
+			if (is_direct_call_optimize(elf_link) == true) {
+				continue;
+			}
+			new_d_val = get_new_addr_by_old_addr(elf_link, ef, dyn->d_un.d_val);
+			break;
+		case DT_PLTREL:
+			if (is_direct_call_optimize(elf_link) == true) {
+				continue;
+			}
+			*dst_dyn = *dyn;
+			dst_dyn++;
+			len++;
+			continue;
 		case DT_PLTRELSZ:
+			if (is_direct_call_optimize(elf_link) == true) {
+				continue;
+			}
 			// size of .rela.plt
 			sec = find_tmp_section_by_name(elf_link, ".rela.plt");
 			new_d_val = sec->sh_size;
@@ -1305,7 +1334,7 @@ static void elf_link_write_sections(elf_link_t *elf_link)
 	// .shstrtab
 	write_shstrtab(elf_link);
 
-	/* 
+	/*
 	 * .comment is useless, it's used to hold comments about the generated ELF
 	 * (details such as compiler version and execution platform).
 	 */
@@ -1330,7 +1359,7 @@ void elf_link_write(elf_link_t *elf_link)
 		modify_INTERP_segment(elf_link);
 	}
 
-	/* 
+	/*
 	 * Notes segment is not processed.
 	 * ELF notes allow for appending arbitrary information for the system to use.
 	 * For example, the GNU tool chain uses ELF notes to pass
@@ -1354,6 +1383,10 @@ void elf_link_write(elf_link_t *elf_link)
 	modify_rela_dyn(elf_link);
 	// .rela.plt .plt.got
 	modify_got(elf_link);
+
+	if (is_direct_vdso_optimize(elf_link) == true) {
+		init_vdso_symbol_addr(elf_link);
+	}
 
 	// modify local call to use jump
 	// .rela.init .rela.text .rela.rodata .rela.tdata .rela.init_array .rela.data

@@ -25,6 +25,8 @@ typedef struct {
 	elf_file_t out_ef;
 	unsigned int in_ef_nr;
 
+	elf_file_t vdso_ef;
+
 	Elf64_Shdr tmp_sechdrs_buf[MAX_ELF_SECTION];
 
 	si_array_t *sec_mapping_arr;
@@ -33,16 +35,25 @@ typedef struct {
 	si_array_t *rela_plt_arr;
 	si_array_t *rela_dyn_arr;
 
+	// direct symbol mapping
+	si_array_t *symbol_mapping_arr;
+
 	unsigned int next_mem_addr;
 	unsigned int next_file_offset;
 
 	bool delete_symbol_version;
 	bool direct_call_optimize;
+	bool direct_vdso_optimize;
 	bool dynamic_link;
 	// use libhook func to hook libc
 	bool hook_func;
 	unsigned long so_path_struct;
 } elf_link_t;
+
+typedef struct {
+	char *symbol_name;
+	unsigned long symbol_addr;
+} elf_symbol_mapping_t;
 
 typedef struct {
 	elf_file_t *src_ef;
@@ -59,9 +70,15 @@ typedef struct {
 	void *dst_obj;
 } elf_obj_mapping_t;
 
+// no use .plt, so clear .plt .rela.plt
 static inline bool is_direct_call_optimize(elf_link_t *elf_link)
 {
 	return elf_link->direct_call_optimize;
+}
+
+static inline bool is_direct_vdso_optimize(elf_link_t *elf_link)
+{
+	return elf_link->direct_vdso_optimize;
 }
 
 static inline elf_file_t *get_template_ef(elf_link_t *elf_link)
@@ -157,6 +174,10 @@ void append_obj_mapping(elf_link_t *elf_link, elf_file_t *ef, Elf64_Shdr *sec, v
 elf_obj_mapping_t *elf_get_mapping_by_dst(elf_link_t *elf_link, void *dst_obj);
 elf_sec_mapping_t *elf_find_sec_mapping_by_dst(elf_link_t *elf_link, void *dst);
 elf_sec_mapping_t *elf_find_sec_mapping_by_srcsec(elf_link_t *elf_link, Elf64_Shdr *src_sec);
+
+void append_symbol_mapping(elf_link_t *elf_link, char *symbol_name, unsigned long symbol_addr);
+unsigned long get_new_addr_by_symbol_mapping(elf_link_t *elf_link, char *symbol_name);
+void init_vdso_symbol_addr(elf_link_t *elf_link);
 
 unsigned long elf_get_new_tls_offset(elf_link_t *elf_link, elf_file_t *ef, unsigned long obj_tls_offset);
 

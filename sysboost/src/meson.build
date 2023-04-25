@@ -8,7 +8,7 @@ endif
 
 sources = files([
                   'main.c',
-                  'link_elf.c',
+                  'elf_link_elf.c',
                   'elf_read_elf.c',
                   'elf_hugepage.c',
                   'elf_link_common.c',
@@ -16,7 +16,6 @@ sources = files([
                   'elf_relocation_' + cpu_arch + '.c',
                   'elf_check_elf.c',
                   'elf_write_elf.c',
-                  'elf_daemon.c',
                 ])
 
 tools = [

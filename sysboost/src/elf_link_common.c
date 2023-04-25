@@ -15,6 +15,81 @@
 #include "si_debug.h"
 #include "si_log.h"
 
+// symbol_name string can not change
+void append_symbol_mapping(elf_link_t *elf_link, char *symbol_name, unsigned long symbol_addr)
+{
+	elf_symbol_mapping_t sym_map = {0};
+
+	sym_map.symbol_name = symbol_name;
+	sym_map.symbol_addr = symbol_addr;
+
+	si_array_append(elf_link->symbol_mapping_arr, &sym_map);
+}
+
+unsigned long get_new_addr_by_symbol_mapping(elf_link_t *elf_link, char *symbol_name)
+{
+	int len = elf_link->symbol_mapping_arr->len;
+	elf_symbol_mapping_t *sym_maps = elf_link->symbol_mapping_arr->data;
+	elf_symbol_mapping_t *sym_map = NULL;
+
+	for (int i = 0; i < len; i++) {
+		sym_map = &sym_maps[i];
+		if (elf_is_same_symbol_name(sym_map->symbol_name, symbol_name) == true) {
+			return sym_map->symbol_addr;
+		}
+	}
+
+	return 0UL;
+}
+
+// layout for vdso and out.ELF
+// vvar | vdso | app
+// 8K     4K     2M+
+static unsigned long vdso_get_new_addr(Elf64_Sym *sym)
+{
+	return 0UL - 4096UL + (unsigned long)sym->st_value;
+}
+
+#define VDSO_PREFIX_LEN (sizeof("__kernel_") - 1)
+static char *vdso_name_to_syscall_name(char *name)
+{
+	return name + VDSO_PREFIX_LEN;
+}
+
+void init_vdso_symbol_addr(elf_link_t *elf_link)
+{
+	elf_file_t *vdso_ef = &elf_link->vdso_ef;
+
+	// TODO: probe AUX parameter
+	elf_link->direct_vdso_optimize = false;
+
+	vdso_ef->file_name = "vdso";
+	vdso_ef->hdr = (Elf64_Ehdr *)0xfffff7ffb000UL;
+	elf_parse_hdr(vdso_ef);
+
+	if (vdso_ef->dynsym_sec == NULL) {
+		SI_LOG_DEBUG(".dynsym not exist\n");
+	}
+
+	elf_show_dynsym(vdso_ef);
+
+	int sym_count = vdso_ef->dynsym_sec->sh_size / sizeof(Elf64_Sym);
+	Elf64_Sym *syms = (Elf64_Sym *)(((void *)vdso_ef->hdr) + vdso_ef->dynsym_sec->sh_offset);
+	for (int j = 0; j < sym_count; j++) {
+		Elf64_Sym *sym = &syms[j];
+		char *name = elf_get_dynsym_name(vdso_ef, sym);
+		// vdso func __kernel_clock_getres
+		if (name == NULL || name[0] != '_') {
+			continue;
+		}
+		char *symbol_name = vdso_name_to_syscall_name(name);
+		unsigned long symbol_addr = vdso_get_new_addr(sym);
+		append_symbol_mapping(elf_link, symbol_name, symbol_addr);
+	}
+
+	return;
+}
+
 void show_sec_mapping(elf_link_t *elf_link)
 {
 	int len = elf_link->sec_mapping_arr->len;
@@ -293,25 +368,25 @@ unsigned long get_new_offset_by_old_offset(elf_link_t *elf_link, elf_file_t *src
 
 static unsigned long _get_ifunc_new_addr(elf_link_t *elf_link, char *sym_name);
 
-static unsigned long find_sym_new_addr(elf_link_t *elf_link, char *sym_name)
+static unsigned long _get_new_addr_by_sym_name(elf_link_t *elf_link, char *sym_name)
 {
 	int count = elf_link->in_ef_nr;
 	elf_file_t *ef = NULL;
 	Elf64_Sym *sym = NULL;
-        int sym_count;
+	int sym_count;
 
-        // TODO: Refactoring is required to find its own symbol integration.
-        // The sequence of searching symbols is self, template, dynsym, and others
-        // Only the template file does not contain dynsym
-        ef = get_template_ef(elf_link);
-        sym_count = ef->symtab_sec->sh_size / sizeof(Elf64_Sym);
-        Elf64_Sym *syms = (Elf64_Sym *)(((void *)ef->hdr) + ef->symtab_sec->sh_offset);
-        for (int j = 0; j < sym_count; j++) {
-                sym = &syms[j];
-                char *name = elf_get_symbol_name(ef, sym);
-                if (elf_is_same_symbol_name(sym_name, name) && sym->st_shndx != SHN_UNDEF)
-                        goto out;
-        }
+	// TODO: Refactoring is required to find its own symbol integration.
+	// The sequence of searching symbols is self, template, dynsym, and others
+	// Only the template file does not contain dynsym
+	ef = get_template_ef(elf_link);
+	sym_count = ef->symtab_sec->sh_size / sizeof(Elf64_Sym);
+	Elf64_Sym *syms = (Elf64_Sym *)(((void *)ef->hdr) + ef->symtab_sec->sh_offset);
+	for (int j = 0; j < sym_count; j++) {
+		sym = &syms[j];
+		char *name = elf_get_symbol_name(ef, sym);
+		if (elf_is_same_symbol_name(sym_name, name) && sym->st_shndx != SHN_UNDEF)
+			goto out;
+	}
 
 	// pubilc func sym is in dynsym
 	for (int i = 0; i < count; i++) {
@@ -354,7 +429,7 @@ static unsigned long _get_ifunc_new_addr(elf_link_t *elf_link, char *sym_name)
 
 	for (unsigned i = 0; i < IFUNC_MAPPING_LEN; i++) {
 		if (elf_is_same_symbol_name(sym_name, ifunc_mapping[i][0]))
-			return find_sym_new_addr(elf_link, ifunc_mapping[i][1]);
+			return _get_new_addr_by_sym_name(elf_link, ifunc_mapping[i][1]);
 	}
 
 	si_panic("ifunc %s is not known\n", sym_name);
@@ -425,13 +500,20 @@ static unsigned long _get_new_addr_by_sym(elf_link_t *elf_link, elf_file_t *ef,
 		}
 	}
 
+	if (is_direct_vdso_optimize(elf_link) == true) {
+		unsigned long ret = get_new_addr_by_symbol_mapping(elf_link, sym_name);
+		if (ret != 0UL) {
+			return ret;
+		}
+	}
+
 	// When the shndx != SHN_UNDEF, the symbol in this ELF.
 	if (sym->st_shndx != SHN_UNDEF) {
 		return get_new_addr_by_old_addr(elf_link, ef, sym->st_value);
 	}
 
 	// find sym in other merge ELF
-	return find_sym_new_addr(elf_link, sym_name);
+	return _get_new_addr_by_sym_name(elf_link, sym_name);
 }
 
 unsigned long get_new_addr_by_sym(elf_link_t *elf_link, elf_file_t *ef, Elf64_Sym *sym)

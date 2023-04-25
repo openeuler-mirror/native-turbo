@@ -333,6 +333,7 @@ void read_elf_sections(elf_file_t *ef)
 	Elf64_Ehdr *hdr = ef->hdr;
 	Elf64_Shdr *sechdrs = NULL;
 	Elf64_Shdr *strhdr;
+	Elf64_Nhdr *nhdr = (Elf64_Nhdr *)(hdr + sechdrs->sh_offset);
 
 	// sechdrs addr caller set when tmp writer
 	if (ef->sechdrs == NULL) {
@@ -363,6 +364,9 @@ void read_elf_sections(elf_file_t *ef)
 			index_str = sechdrs[i].sh_link;
 			ef->dynstr_sec = &sechdrs[index_str];
 			ef->dynstr_data = (char *)hdr + sechdrs[index_str].sh_offset;
+		} else if (strcmp(elf_get_section_name(ef, &sechdrs[i]), ".note.gnu.build-id") == 0) {
+			nhdr = (Elf64_Nhdr *)(hdr + sechdrs[i].sh_offset);
+			ef->build_id = (char *)(hdr + sechdrs[i].sh_offset + sizeof(Elf64_Nhdr) + nhdr->n_namesz);
 		}
 	}
 }
@@ -418,10 +422,30 @@ void read_elf_phdr(elf_file_t *ef)
 	}
 }
 
+void read_elf_rel(elf_file_t *ef)
+{
+	Elf64_Ehdr *hdr = ef->hdr;
+	Elf64_Shdr *shdrs = ef->sechdrs;
+	int shnum = hdr->e_shnum;
+	// use type of sections save all rela sections
+	Elf64_Shdr sbuf[shnum];
+
+	for (int i = 0; i < shnum; i++) {
+		if (shdrs[i].sh_type == SHT_RELA) {
+			for (int j = 0; j < shnum; j++) {
+				sbuf[j] = shdrs[i];
+			}
+		}
+	}
+
+	ef->rel = sbuf;
+}
+
 void elf_parse_hdr(elf_file_t *ef)
 {
 	read_elf_sections(ef);
 	read_elf_phdr(ef);
+	read_elf_rel(ef);
 }
 
 static int read_elf_info(int fd, elf_file_t *ef)
@@ -439,19 +463,89 @@ static int read_elf_info(int fd, elf_file_t *ef)
 	return 0;
 }
 
+static int read_extern_rel(elf_file_t *ef)
+{
+	int fd = -1;
+	int ret = 0;
+	void *buf;
+	Elf64_Ehdr *hdr;
+
+	// In Linux, the file name contains a maximum of 255 characters
+	char rel_file_name[255];
+	char *file_name = ef->file_name;
+
+	// By default, the matching relocations file is stored in the same directory as the original file
+	// The name of the relocations file is the original file name plus the extension .rel
+	memcpy(rel_file_name, file_name, sizeof(rel_file_name));
+	strncat(rel_file_name, ".relocation", sizeof(rel_file_name) - strlen(rel_file_name) - 1);
+
+	fd = open(rel_file_name, O_RDONLY);
+	if (fd == -1) {
+		SI_LOG_ERR("open extern file %s fail\n", rel_file_name);
+		return -1;
+	}
+
+	ret = lseek(fd, 0, SEEK_END);
+	buf = mmap(0, ret, PROT_READ, MAP_PRIVATE, fd, 0);
+	SI_LOG_DEBUG("ELF len %d, buf addr 0x%08lx\n", ret, (unsigned long)buf);
+
+	hdr = (Elf64_Ehdr *)buf;
+
+	Elf64_Shdr *shdrs = (Elf64_Shdr *)(hdr + hdr->e_shoff);
+	Elf64_Nhdr *nhdr = (Elf64_Nhdr *)(hdr + shdrs->sh_offset);
+	char *build_id = NULL;
+	int shnum = hdr->e_shnum;
+
+	for (int i = 0; i < shnum; i++) {
+		if (strcmp(elf_get_section_name(ef, &shdrs[i]), ".note.gnu.build-id") == 0) {
+			nhdr = (Elf64_Nhdr *)(hdr + shdrs[i].sh_offset);
+			build_id = (char *)(hdr + shdrs[i].sh_offset + sizeof(Elf64_Nhdr) + nhdr->n_namesz);
+		}
+	}
+
+	if (build_id == NULL) {
+		SI_LOG_ERR("failed to find build id in %s\n", rel_file_name);
+		return -1;
+	}
+
+	// Compare the value with the build ID in the ELF file, the length of the build ID is 40 characters.
+	if (memcmp(ef->build_id, build_id, 40) != 0) {
+		SI_LOG_ERR("build id mismatch for %s\n", rel_file_name);
+		return -1;
+	}
+
+	// use type of sections save all rela sections
+	Elf64_Shdr sbuf[shnum];
+
+	for (int i = 0; i < shnum; i++) {
+		if (shdrs[i].sh_type == SHT_RELA) {
+			for (int j = 0; j < shnum; j++) {
+				sbuf[j] = shdrs[i];
+			}
+		}
+	}
+
+	ef->rel = sbuf;
+
+	SI_LOG_DEBUG("read extern relocations\n");
+	return 0;
+}
+
 int elf_read_file(char *file_name, elf_file_t *ef)
 {
 	int fd = -1;
+	int ret = 0;
 
 	fd = open(file_name, O_RDONLY);
 	if (fd == -1) {
 		SI_LOG_ERR("open %s fail\n", file_name);
-		return -1;
+		ret = -1;
+		goto out;
 	}
 	ef->fd = fd;
 	ef->file_name = strdup(file_name);
 
-	int ret = read_elf_info(fd, ef);
+	ret = read_elf_info(fd, ef);
 	if (ret != 0) {
 		si_panic("read_elf_info fail, %s\n", file_name);
 	}
@@ -461,13 +555,35 @@ int elf_read_file(char *file_name, elf_file_t *ef)
 		si_panic("ELF must compile with pie, %s\n", file_name);
 	}
 
+	// check rel
+	if (!ef->rel) {
+		ret = read_extern_rel(ef);
+	}
+
 	// ELF must have relocation
-	Elf64_Shdr *sec = elf_find_section_by_name(ef, ".rela.text");
-	if (sec == NULL) {
+	if (!ef->rel) {
 		si_panic("ELF must have .rela.text, %s\n", file_name);
 	}
 
-	return 0;
+out:
+	return ret;
+}
+
+void elf_show_dynsym(elf_file_t *ef)
+{
+	if (ef->dynsym_sec == NULL) {
+		SI_LOG_DEBUG(".dynsym not exist\n");
+	}
+
+	SI_LOG_DEBUG("  [Nr] Name\n");
+
+	int sym_count = ef->dynsym_sec->sh_size / sizeof(Elf64_Sym);
+	Elf64_Sym *syms = (Elf64_Sym *)(((void *)ef->hdr) + ef->dynsym_sec->sh_offset);
+	for (int j = 0; j < sym_count; j++) {
+		Elf64_Sym *sym = &syms[j];
+		char *name = elf_get_dynsym_name(ef, sym);
+		SI_LOG_DEBUG("  [%2d] %-32s %016lx\n", j, name, sym->st_value);
+	}
 }
 
 void elf_show_sections(elf_file_t *ef)
