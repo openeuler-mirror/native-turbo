@@ -11,8 +11,7 @@
 #include <unistd.h>
 
 #include "elf_read_elf.h"
-#include "elf_daemon.h"
-#include "link_elf.h"
+#include "elf_link_elf.h"
 #include "si_debug.h"
 #include "si_log.h"
 
@@ -23,7 +22,7 @@ int main(int argc, char *argv[])
 	elf_link_t *elf_link = elf_link_new();
 	int cur_arg;
 	char *str_ret;
-        int ret = 0;
+	int ret = 0;
 
 	if (!elf_link) {
 		SI_LOG_INFO("malloc fail\n");
@@ -49,18 +48,12 @@ int main(int argc, char *argv[])
 	if (strcmp(argv[cur_arg], "-static") == 0) {
 		elf_link->dynamic_link = false;
 		elf_link->direct_call_optimize = true;
+		// TODO: probe AUX parameter
+		elf_link->direct_vdso_optimize = true;
 		cur_arg++;
 		SI_LOG_INFO("static mode\n");
 	}
 
-        // -daemon parameter is used to
-        if (strcmp(argv[cur_arg], "-daemon") == 0) {
-                elf_link->dynamic_link = false;
-                elf_link->direct_call_optimize = true;
-                cur_arg++;
-                elf_daemon();
-                SI_LOG_INFO("daemon mode\n");
-        }
 	for (int i = cur_arg; i < argc; i++) {
 		str_ret = realpath(argv[i], tmp);
 		if (!str_ret)

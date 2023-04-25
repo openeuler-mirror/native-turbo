@@ -48,6 +48,8 @@
 
 int main(void)
 {
+	(void)gettimeofday(NULL, 0);
+
 	// gcc compile optimization will delete some code, we need use random len
 	char buf[128] = {0};
 	(void)getrandom(buf, sizeof(buf), 0);
@@ -189,7 +191,6 @@ int main(void)
 	(void)sigemptyset(NULL);
 	(void)bindtextdomain(NULL, NULL);
 	(void)__fpurge(NULL);
-	(void)gettimeofday(NULL, 0);
 	(void)getgroups(0, NULL);
 	(void)sleep(2);
 	(void)fchmod(0, 0);

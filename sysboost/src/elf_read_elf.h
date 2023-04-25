@@ -17,6 +17,8 @@ typedef struct {
 	Elf64_Shdr *dynsym_sec;
 	Elf64_Shdr *dynstr_sec;
 
+	Elf64_Shdr *rel;
+
 	Elf64_Phdr *hdr_Phdr;
 	Elf64_Phdr *text_Phdr;
 	Elf64_Phdr *rodata_Phdr;
@@ -32,6 +34,7 @@ typedef struct {
 
 	int fd;
 	char *file_name;
+	char *build_id;
 } elf_file_t;
 
 static inline char *elf_get_section_name(const elf_file_t *ef, const Elf64_Shdr *sec)
@@ -94,6 +97,7 @@ void elf_parse_hdr(elf_file_t *ef);
 int elf_read_file(char *file_name, elf_file_t *elf);
 
 // debug
+void elf_show_dynsym(elf_file_t *ef);
 void elf_show_sections(elf_file_t *ef);
 void elf_show_segments(elf_file_t *ef);
 
