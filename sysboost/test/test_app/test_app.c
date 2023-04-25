@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 extern int lib1_add(int a, int b);
@@ -173,6 +174,13 @@ void test_IFUNC(void)
 		printf("%s: error\n", __func__);
 }
 
+void test_vdso(void)
+{
+	printf("%s: \n", __func__);
+	struct timeval tv = {0};
+	(void)gettimeofday(&tv, 0);
+}
+
 #define TEST_DLSYM_FLAG (1 << 0)
 
 int main(int argc, char *argv[])
@@ -184,6 +192,8 @@ int main(int argc, char *argv[])
 	if (cur_arg < argc && strcmp(argv[cur_arg], "-dlsym") == 0) {
 		test_flag |= TEST_DLSYM_FLAG;
 	}
+
+	test_vdso();
 
 	test_switch();
 
