@@ -13,6 +13,7 @@ release:
 debug:
 	rm -rf build
 	meson build --buildtype=debug
+	make -C sysboost
 
 test:
 	meson test -C build
@@ -22,6 +23,7 @@ format:
 
 clean:
 	ninja -C build clean
+	make -C sysboost clean
 
 static_template_debug:
 	readelf -W -a ./build/sysboost/src/static_template/static_template > static_template.elf
