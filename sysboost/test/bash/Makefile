@@ -4,6 +4,8 @@ BUILD_DIR=$(ROOT_DIR)build/
 TEMPLATE_FILE=$(BUILD_DIR)sysboost/src/static_template/sysboost_static_template
 SYSBOOST=$(BUILD_DIR)sysboost/sysboost
 
+TEMPLATE_FILE_PUB_PATH=/usr/bin/sysboost_static_template
+
 .PHONY: all
 
 all: bash
@@ -17,14 +19,15 @@ bash: static_template_debug
 	make -C $(ROOT_DIR)
 	clear
 	@echo ===rto===
-	$(SYSBOOST) -static $(TEMPLATE_FILE) bash libtinfo.so
+	cp -f $(TEMPLATE_FILE) $(TEMPLATE_FILE_PUB_PATH)
+	$(SYSBOOST) -static bash libtinfo.so
 	readelf -W -a bash.rto > bash.rto.elf
 	objdump -d bash.rto > bash.rto.asm
 	@echo ===run===
 	./bash.rto -c "echo 1"
 
 rto:
-	gdb --args $(SYSBOOST) -static $(TEMPLATE_FILE) bash libtinfo.so
+	gdb --args $(SYSBOOST) -static bash libtinfo.so
 
 run:
 	gdb --args ./bash.rto -c "echo 1"
