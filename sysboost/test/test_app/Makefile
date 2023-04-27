@@ -8,6 +8,7 @@ LIB1=$(BUILD_DIR)sysboost/test/test_app/libutil1.so
 LIB2=$(BUILD_DIR)sysboost/test/test_app/libutil2.so
 LIBHOOK=$(BUILD_DIR)sysboost/src/libhook/libhook.so
 
+TEMPLATE_FILE_PUB_PATH=/usr/bin/sysboost_static_template
 
 .PHONY: all
 
@@ -52,7 +53,8 @@ test-s: static_template_debug
 	objdump -d $(LIB1) > libutil1.so.asm
 	clear
 	@echo ===rto===
-	$(SYSBOOST) -static $(TEMPLATE_FILE) $(TEST_APP) $(LIB1) $(LIB2)
+	cp -f $(TEMPLATE_FILE) $(TEMPLATE_FILE_PUB_PATH)
+	$(SYSBOOST) -static $(TEST_APP) $(LIB1) $(LIB2)
 	readelf -W -a test_app.rto > test_app.rto.elf
 	objdump -d test_app.rto > test_app.rto.asm
 	@echo ===run_ori===
@@ -61,7 +63,7 @@ test-s: static_template_debug
 	./test_app.rto
 
 rto-s:
-	gdb --args $(SYSBOOST) -static $(TEMPLATE_FILE) $(TEST_APP) $(LIB1) $(LIB2)
+	gdb --args $(SYSBOOST) -static $(TEST_APP) $(LIB1) $(LIB2)
 
 run:
 	gdb --args ./test_app.rto
