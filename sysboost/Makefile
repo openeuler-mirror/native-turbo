@@ -1,8 +1,8 @@
 .PHONY: all clean test
 
-all: sysboost
+all: sysboostd
 
-sysboost:
+sysboostd:
 	clear
 	cargo build
 
@@ -10,14 +10,7 @@ clean:
 	cargo clean
 
 test:
-	cargo build
-	clear
-	@echo ======
-	target/debug/sysboost -h
-	@echo ======
-	target/debug/sysboost -static file1 file2 file3
-	@echo ======
-	target/debug/sysboost -daemon
+	cargo test -- --nocapture
 
 format:
 	cargo fmt

@@ -1,16 +1,20 @@
 [package]
-name = "sysboost"
+name = "sysboostd"
 version = "1.1.0"
 edition = "2021"
-default-run = "sysboost"
+default-run = "sysboostd"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 
 [[bin]]
-name ="sysboost"
+name ="sysboostd"
 path ="bin/main.rs"
 
 [dependencies]
+basic = { path = "libs/basic" }
+
 serde = { version = "1.0.143", features = ["serde_derive"] }
 toml = "0.5.9"
+inotify = "0.10"
+log = "0.4"
