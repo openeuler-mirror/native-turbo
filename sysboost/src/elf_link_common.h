@@ -4,6 +4,7 @@
 
 #include <stdbool.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "elf_read_elf.h"
 #include "si_array.h"
@@ -14,6 +15,8 @@
 #define SKIP_ONE_RELA (1)
 #define SKIP_TWO_RELA (2)
 #define SKIP_THREE_RELA (3)
+
+#define NOT_FOUND (-1UL)
 
 #define MAX_ELF_FILE 512
 #define MAX_ELF_SECTION 128
@@ -26,6 +29,8 @@ typedef struct {
 	unsigned int in_ef_nr;
 
 	elf_file_t vdso_ef;
+	elf_file_t *hook_func_ef;
+	elf_file_t *libc_ef;
 
 	Elf64_Shdr tmp_sechdrs_buf[MAX_ELF_SECTION];
 
@@ -70,6 +75,26 @@ typedef struct {
 	void *dst_obj;
 } elf_obj_mapping_t;
 
+static inline bool is_static_mode(elf_link_t *elf_link)
+{
+	return !elf_link->dynamic_link;
+}
+
+static inline bool is_nolibc_mode(elf_link_t *elf_link)
+{
+#ifndef __aarch64__
+	if (!elf_link->libc_ef)
+		si_panic("nolibc_mode not support x86\n");
+#endif
+
+	return !elf_link->libc_ef;
+}
+
+static inline bool is_hook_func(elf_link_t *elf_link)
+{
+	return elf_link->hook_func;
+}
+
 // no use .plt, so clear .plt .rela.plt
 static inline bool is_direct_call_optimize(elf_link_t *elf_link)
 {
@@ -95,6 +120,11 @@ static inline elf_file_t *get_main_ef(elf_link_t *elf_link)
 
 	// static mode use second ef as main ef, which contains main function we need.
 	return &elf_link->in_efs[1];
+}
+
+static inline elf_file_t *get_out_ef(elf_link_t *elf_link)
+{
+	return &elf_link->out_ef;
 }
 
 static inline int elf_read_s32(elf_file_t *ef, unsigned long offset)
@@ -137,6 +167,12 @@ static inline void elf_write_u32(elf_file_t *ef, unsigned long addr_, unsigned v
 	*addr = value;
 }
 
+static inline void elf_write_u8(elf_file_t *ef, unsigned long addr_, uint8_t value)
+{
+	uint8_t *addr = ((void *)ef->hdr + (unsigned long)addr_);
+	*addr = value;
+}
+
 static inline void elf_write_value(elf_file_t *ef, unsigned long addr_, void *val, unsigned int len)
 {
 	void *addr = ((void *)ef->hdr + (unsigned long)addr_);
@@ -149,6 +185,7 @@ static inline void modify_elf_file(elf_link_t *elf_link, unsigned long loc, void
 	memcpy(dst, val, len);
 }
 
+bool is_symbol_maybe_undefined(const char *name);
 bool is_gnu_weak_symbol(Elf64_Sym *sym);
 
 unsigned long get_new_offset_by_old_offset(elf_link_t *elf_link, elf_file_t *src_ef, unsigned long offset);
@@ -162,6 +199,7 @@ Elf64_Shdr *find_tmp_section_by_name(elf_link_t *elf_link, const char *sec_name)
 Elf64_Shdr *find_tmp_section_by_src(elf_link_t *elf_link, Elf64_Shdr *shdr);
 
 unsigned long find_sym_old_addr(elf_file_t *ef, char *sym_name);
+unsigned long find_sym_new_addr(elf_link_t *elf_link, elf_file_t *ef, char *sym_name);
 unsigned long get_new_addr_by_sym(elf_link_t *elf_link, elf_file_t *ef, Elf64_Sym *sym);
 unsigned long get_new_addr_by_dynsym(elf_link_t *elf_link, elf_file_t *ef, Elf64_Sym *sym);
 
@@ -177,7 +215,7 @@ elf_sec_mapping_t *elf_find_sec_mapping_by_srcsec(elf_link_t *elf_link, Elf64_Sh
 
 void append_symbol_mapping(elf_link_t *elf_link, char *symbol_name, unsigned long symbol_addr);
 unsigned long get_new_addr_by_symbol_mapping(elf_link_t *elf_link, char *symbol_name);
-void init_vdso_symbol_addr(elf_link_t *elf_link);
+void init_symbol_mapping(elf_link_t *elf_link);
 
 unsigned long elf_get_new_tls_offset(elf_link_t *elf_link, elf_file_t *ef, unsigned long obj_tls_offset);
 

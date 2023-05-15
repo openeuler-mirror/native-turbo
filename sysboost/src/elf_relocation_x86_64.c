@@ -139,6 +139,18 @@ static void modify_tls_insn(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *re
 	modify_tls_insn_use_fs(elf_link, loc, offset_in_insn);
 }
 
+static void modify_tls_insn_data_offset(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rela, Elf64_Sym *sym)
+{
+	// first insn imm addr nend change
+	// 20ee30:	48 c7 c0 88 ff ff ff 	mov    $0xffffffffffffff88,%rax
+	// 20ee37:	64 48 8b 00          	mov    %fs:(%rax),%rax
+	// 20ee3b:	48 8b 10             	mov    (%rax),%rdx
+	// 000000000020ee33  00000fe800000016 R_X86_64_GOTTPOFF      0000000000000050 _nl_current_LC_IDENTIFICATION - 4
+	int offset_in_insn = get_new_tls_insn_offset(elf_link, ef, sym);
+	unsigned long loc = get_new_offset_by_old_offset(elf_link, ef, rela->r_offset);
+	elf_write_u32(&elf_link->out_ef, loc, offset_in_insn);
+}
+
 // string symbol may have some name, change offset use insn direct value
 static void modify_insn_data_offset(elf_link_t *elf_link, elf_file_t *ef, unsigned long loc, int addend)
 {
@@ -152,19 +164,70 @@ static void modify_insn_data_offset(elf_link_t *elf_link, elf_file_t *ef, unsign
 	modify_insn_offset(elf_link, loc, obj_addr, addend);
 }
 
+static bool is_need_change_addr(elf_link_t *elf_link, elf_file_t *ef, Elf64_Sym *sym)
+{
+	if (ELF64_ST_TYPE(sym->st_info) == STT_GNU_IFUNC) {
+		return true;
+	}
+
+	char *sym_name = elf_get_symbol_name(ef, sym);
+	unsigned long ret = get_new_addr_by_symbol_mapping(elf_link, sym_name);
+	if (ret != NOT_FOUND) {
+		return true;
+	}
+
+	// local func call used offset in same section, do nothing
+	// e8 4d 02 00 00          call   200330 <run_b>
+	if (sym->st_shndx != SHN_UNDEF) {
+		return false;
+	}
+
+	return true;
+}
+
+// static mode, direct exit to _exit
+// 000000000020195d  0000098e00000004 R_X86_64_PLT32         0000000000215020 exit - 4
+// 2446: 0000000000215020    32 FUNC    LOCAL  DEFAULT   13 exit
+// 20195c:	e8 bf 36 01 00       	call   215020 <exit>
 static void modify_insn_func_offset(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rela, Elf64_Sym *sym)
 {
+	int val = 0;
+
+	if (is_need_change_addr(elf_link, ef, sym) == false) {
+		return;
+	}
+
 	// This is where to make the change
 	unsigned long loc = get_new_addr_by_old_addr(elf_link, ef, rela->r_offset);
 	unsigned long sym_addr = get_new_addr_by_sym(elf_link, ef, sym);
-
 	if (sym_addr == 0) {
-		// symbol is in other ELF, change offset
-		modify_insn_data_offset(elf_link, ef, rela->r_offset, rela->r_addend);
+		const char *sym_name = elf_get_symbol_name(ef, sym);
+		if (is_symbol_maybe_undefined(sym_name)) {
+			goto out;
+		}
+		si_panic("find func fail %s %016lx\n", sym_name, rela->r_offset);
 		return;
 	}
-	int val = (long)sym_addr - (long)loc + rela->r_addend;
+
+	val = (long)sym_addr - (long)loc + rela->r_addend;
+out:
 	modify_elf_file(elf_link, loc, &val, sizeof(int));
+}
+
+static void fix_main_for_static_mode(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rela, Elf64_Sym *sym)
+{
+	if (is_static_mode(elf_link) == false) {
+		return;
+	}
+
+	// _start call __libc_start_main, set main func as arg0, change it to real addr
+	// 00000000002011fb  00000dd500000002 R_X86_64_PC32          0000000000200af0 main - 4
+	// 3541: 0000000000200af0  1763 FUNC    GLOBAL DEFAULT   13 main
+	// 2011f8:	48 8d 3d f1 f8 ff ff 	lea    -0x70f(%rip),%rdi        # 200af0 <main>
+	char *name = elf_get_symbol_name(ef, sym);
+	if (elf_is_same_symbol_name(name, "main")) {
+		modify_insn_func_offset(elf_link, ef, rela, sym);
+	}
 }
 
 // retrun value tell skip num
@@ -195,9 +258,22 @@ int modify_local_call_rela(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rel
 		// e8 e6 0c ea ff          callq  6020b0 <__tls_get_addr@plt>                   R_X86_64_PLT32
 		// 48 8b 80 00 00 00 00    mov    0x0(%rax),%rax                                R_X86_64_DTPOFF32
 		// this time just modify immediate data
-		// TODO: change insn to use fs
+		// TODO: feature, change insn to use fs
 		modify_insn_data_offset(elf_link, ef, rela->r_offset, rela->r_addend);
 		return SKIP_TWO_RELA;
+	case R_X86_64_GOTTPOFF:
+		// 32 bit signed PC relative offset to GOT entry for IE symbol
+		// 20ee30:	48 c7 c0 88 ff ff ff 	mov    $0xffffffffffffff88,%rax
+		// 20ee37:	64 48 8b 00          	mov    %fs:(%rax),%rax
+		// 20ee3b:	48 8b 10             	mov    (%rax),%rdx
+		// 000000000020ee33  00000fe800000016 R_X86_64_GOTTPOFF      0000000000000050 _nl_current_LC_IDENTIFICATION - 4
+	case R_X86_64_TPOFF32:
+		// Offset in initial TLS block
+		// 22cb1b:	64 48 8b 04 25 d0 ff 	mov    %fs:0xffffffffffffffd0,%rax
+		// 22cb22:	ff ff
+		// 000000000022cb20  0000030900000017 R_X86_64_TPOFF32       0000000000000098 tcache + 0
+		modify_tls_insn_data_offset(elf_link, ef, rela, sym);
+		break;
 	case R_X86_64_DTPOFF32:
 		// insn may move by optimize
 		// this insn is offset to TLS block begin, no need change
@@ -207,11 +283,7 @@ int modify_local_call_rela(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rel
 		// e8 74 ff ff ff          call   200070 <lib1_add@plt>
 		// jmp and ret, change direct value
 		// e9 ee fc ff ff          jmp    200040 <printf@plt>
-		if (sym->st_shndx == SHN_UNDEF) {
-			modify_insn_func_offset(elf_link, ef, rela, sym);
-		}
-		// local func call used offset in same section, do nothing
-		// e8 4d 02 00 00          call   200330 <run_b>
+		modify_insn_func_offset(elf_link, ef, rela, sym);
 		break;
 	case R_X86_64_GOTPCRELX:
 		// call func use got, change to direct jump
@@ -226,23 +298,27 @@ int modify_local_call_rela(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rel
 		break;
 	case R_X86_64_PC32:
 		// STT_FUNC no need reloc
-		if (ELF64_ST_TYPE(sym->st_info) == STT_FUNC)
+		if (ELF64_ST_TYPE(sym->st_info) == STT_FUNC) {
+			fix_main_for_static_mode(elf_link, ef, rela, sym);
 			break;
+		}
+
 		// data is use offset, STT_OBJECT
 		// global var, change insn offset
 		// lea    0x5fff75(%rip),%rax
-		// TODO: direct mov, do not use lea
+		// TODO: feature, direct mov, do not use lea
 		fallthrough;
 	case R_X86_64_GOTPCREL:
 	case R_X86_64_REX_GOTPCRELX:
-		// TODO: sym may not exist, change data offset
+		// TODO: feature, sym may not exist, change data offset
 		modify_insn_data_offset(elf_link, ef, rela->r_offset, rela->r_addend);
 		break;
 	case R_X86_64_64:
+	case R_X86_64_32S:
 		// direct value, data is already write
 		break;
 	default:
-		SI_LOG_INFO("invalid type %2d r_offset %016lx r_addend %016lx sym_index %4d",
+		SI_LOG_INFO("invalid type %2d r_offset %016lx r_addend %016lx sym_index %4d\n",
 			    (int)ELF64_R_TYPE(rela->r_info), rela->r_offset, rela->r_addend, (int)ELF64_R_SYM(rela->r_info));
 		SI_LOG_INFO(" st_value %016lx\n", sym->st_value);
 		si_panic("invalid type\n");
@@ -255,7 +331,7 @@ int modify_local_call_rela(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rel
 static void clear_rela(Elf64_Rela *dst_rela)
 {
 	(void)memset(dst_rela, 0, sizeof(*dst_rela));
-	// TODO: R_X86_64_NONE can not in .rela.plt
+	// TODO: bug, R_X86_64_NONE can not in .rela.plt
 }
 
 void modify_rela_plt(elf_link_t *elf_link, si_array_t *arr)
@@ -314,7 +390,7 @@ void modify_rela_plt(elf_link_t *elf_link, si_array_t *arr)
 	if (elf_link->dynamic_link == false)
 		return;
 
-	// TODO: change addr for lazy lookup sym, this time not support lazy
+	// TODO: feature, change addr for lazy lookup sym, this time not support lazy
 	// 0000000000001020 <.plt>:
 	//    1020:	ff 35 e2 2f 00 00    	pushq  0x2fe2(%rip)        # 4008 <_GLOBAL_OFFSET_TABLE_+0x8>
 	//    1026:	ff 25 e4 2f 00 00    	jmpq   *0x2fe4(%rip)        # 4010 <_GLOBAL_OFFSET_TABLE_+0x10>

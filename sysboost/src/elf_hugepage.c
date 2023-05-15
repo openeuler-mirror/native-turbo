@@ -11,10 +11,40 @@
 #include <unistd.h>
 
 #include "elf_link_common.h"
+#include "si_debug.h"
+#include "si_log.h"
 
 #ifndef PF_HUGEPAGE
 #define PF_HUGEPAGE (0x01000000)
 #endif
+
+#ifndef EF_AARCH64_AOT
+#define EF_AARCH64_AOT      (0x00010000U)
+#endif
+
+#ifndef EF_AARCH64_HUGEPAGE
+#define EF_AARCH64_HUGEPAGE (0x00020000U)
+#endif
+
+#ifdef __aarch64__
+#define OS_SPECIFIC_FLAG_AOT EF_AARCH64_AOT
+#define OS_SPECIFIC_FLAG_HUGEPAGE EF_AARCH64_HUGEPAGE
+#else
+// TODO: feature, for x86
+#define OS_SPECIFIC_FLAG_AOT EF_AARCH64_AOT
+#define OS_SPECIFIC_FLAG_HUGEPAGE EF_AARCH64_HUGEPAGE
+#endif
+#define OS_SPECIFIC_MASK (0xffffffffU ^ OS_SPECIFIC_FLAG_AOT ^ OS_SPECIFIC_FLAG_HUGEPAGE)
+
+void _elf_set_aot(elf_file_t *ef, bool state)
+{
+	if (state) {
+		ef->hdr->e_flags |= OS_SPECIFIC_FLAG_AOT;
+		ef->hdr->e_flags |= OS_SPECIFIC_FLAG_HUGEPAGE;
+	} else {
+		ef->hdr->e_flags &= OS_SPECIFIC_MASK;
+	}
+}
 
 void elf_set_hugepage(elf_link_t *elf_link)
 {
@@ -30,4 +60,25 @@ void elf_set_hugepage(elf_link_t *elf_link)
 			phdr[i].p_flags |= PF_HUGEPAGE;
 		}
 	}
+
+	_elf_set_aot(ef, true);
+}
+
+int elf_set_aot(char *path, bool state)
+{
+	elf_file_t *ef = malloc(sizeof(elf_file_t));
+	if (ef == NULL) {
+		SI_LOG_ERR("malloc fail\n");
+		return -1;
+	}
+
+	int ret = elf_read_file(path, ef, false);
+	if (ret != 0) {
+		return -1;
+	}
+
+	_elf_set_aot(ef, state);
+
+	close(ef->fd);
+	return 0;
 }
