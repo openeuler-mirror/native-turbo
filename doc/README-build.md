@@ -43,22 +43,21 @@ systemctl start sysboost.service
 systemctl stop sysboost.service
 ~~~
 
-#### 一键合并
-
-~~~
-sysboostd
-~~~
-
 注：需要确保sysboost、包含重定位信息的bash和ncurses包正常安装，其他操作参考systemctl手册
 
 **注：sysboostd只能单实例运行，多实例运行后果不可知**
 
 ### 手动执行
 
-**sysboost属于内部命令, 变化较快, 管理员请勿直接使用**
+**以下属于内部命令, 变化较快, 管理员请勿直接使用**
 
+* 普通合并
 ~~~
 sysboost -static <ELFs>
 # 当前只支持bash合并，执行sysboost -static bash libtinfo.so即可
 ~~~
 
+* 一键合并
+~~~
+sysboostd
+~~~

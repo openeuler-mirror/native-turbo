@@ -4,8 +4,6 @@
 all:
 	ninja -C build -v
 
-#meson compile -C build
-
 release:
 	rm -rf build
 	meson build
