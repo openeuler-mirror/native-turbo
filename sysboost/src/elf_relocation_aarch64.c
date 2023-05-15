@@ -16,7 +16,7 @@
 
 #define unlikely(x) __builtin_expect((x), 0)
 
-#define ARM64_INSN_LNE (4)
+#define ARM64_INSN_LEN (4)
 #define BIAS 0x10
 
 // B
@@ -248,7 +248,7 @@ static unsigned long get_adrp_ldr_new_data_addr(elf_link_t *elf_link, elf_file_t
 	unsigned old_insn_raw = elf_read_u32(ef, old_insn_addr);
 	unsigned long old_got_data_addr = get_adrp_addr(old_insn_raw, old_insn_addr);
 	// next insn have immediate value
-	unsigned old_insn_raw2 = elf_read_u32(ef, old_insn_addr + ARM64_INSN_LNE);
+	unsigned old_insn_raw2 = elf_read_u32(ef, old_insn_addr + ARM64_INSN_LEN);
 	SI_LOG_DEBUG("old_insn_addr %x  old_insn_raw %x  old_insn_raw2 %x\n", old_insn_addr, old_insn_raw, old_insn_raw2);
 	old_got_data_addr += get_ldr_addr(old_insn_raw2);
 
@@ -263,9 +263,9 @@ static void modify_adrp_ldr_tls(elf_link_t *elf_link, unsigned long insn_addr, u
 	elf_write_u32(&elf_link->out_ef, insn_addr, new_insn_raw);
 
 	new_insn_raw = gen_ldst_binary_inpage(obj_addr, 0xf947f400U);
-	elf_write_u32(&elf_link->out_ef, insn_addr + ARM64_INSN_LNE, new_insn_raw);
-	elf_write_u32(&elf_link->out_ef, insn_addr + ARM64_INSN_LNE * 2, 0xd503201fU);
-	elf_write_u32(&elf_link->out_ef, insn_addr + ARM64_INSN_LNE * 3, 0xd503201fU);
+	elf_write_u32(&elf_link->out_ef, insn_addr + ARM64_INSN_LEN, new_insn_raw);
+	elf_write_u32(&elf_link->out_ef, insn_addr + ARM64_INSN_LEN * 2, 0xd503201fU);
+	elf_write_u32(&elf_link->out_ef, insn_addr + ARM64_INSN_LEN * 3, 0xd503201fU);
 }
 
 static void modify_adrp_ldr_tls_ie(elf_link_t *elf_link, unsigned long insn_addr, unsigned long obj_addr,
@@ -278,18 +278,18 @@ static void modify_adrp_ldr_tls_ie(elf_link_t *elf_link, unsigned long insn_addr
 	elf_write_u32(&elf_link->out_ef, insn_addr, new_insn_raw);
 
 	// use elf_read_u32 to get ldr binary
-	binary = elf_read_u32(ef, old_insn_addr + ARM64_INSN_LNE);
+	binary = elf_read_u32(ef, old_insn_addr + ARM64_INSN_LEN);
 	new_insn_raw = gen_ldst_binary_inpage(obj_addr, binary);
-	elf_write_u32(&elf_link->out_ef, insn_addr + ARM64_INSN_LNE, new_insn_raw);
+	elf_write_u32(&elf_link->out_ef, insn_addr + ARM64_INSN_LEN, new_insn_raw);
 }
 
 static void modify_mov_tls_ie(elf_link_t *elf_link, unsigned long insn_addr, unsigned long obj_addr,
 			      elf_file_t *ef, unsigned long old_insn_addr)
 {
 	// 1st insn don't need to change, there is 2nd insn
-	unsigned binary = elf_read_u32(ef, old_insn_addr + ARM64_INSN_LNE);
+	unsigned binary = elf_read_u32(ef, old_insn_addr + ARM64_INSN_LEN);
 	unsigned new_insn_raw = gen_movk_addr(obj_addr, binary);
-	elf_write_u32(&elf_link->out_ef, insn_addr + ARM64_INSN_LNE, new_insn_raw);
+	elf_write_u32(&elf_link->out_ef, insn_addr + ARM64_INSN_LEN, new_insn_raw);
 }
 
 static void modify_tls_insn(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela *rela, Elf64_Sym *sym)
@@ -1001,7 +1001,7 @@ void correct_stop_libc_atexit(elf_link_t *elf_link)
 
 	/* find adrp matching with ldr above in __run_exit_handlers() */
 	unsigned long old_adrp_addr = 0;
-	for (unsigned long addr = start; addr < end; addr += ARM64_INSN_LNE) {
+	for (unsigned long addr = start; addr < end; addr += ARM64_INSN_LEN) {
 		binary = elf_read_u32(template_ef, addr);
 		if (!is_adrp_instruction(binary))
 			continue;
@@ -1041,4 +1041,35 @@ void correct_stop_libc_atexit(elf_link_t *elf_link)
 	}
 	if (!found)
 		si_panic("didn't find corresponding rela entry in .rela.dyn\n");
+}
+
+void replace_symbol(elf_link_t *elf_link, char *old_sym_name, char *new_sym_name)
+{
+	unsigned long target_addr = find_sym_new_addr(elf_link, get_main_ef(elf_link), new_sym_name);
+	unsigned long origin_addr =
+		find_sym_new_addr(elf_link, get_template_ef(elf_link), old_sym_name);
+
+	elf_file_t *out_ef = get_out_ef(elf_link);
+	Elf64_Shdr *sec_text = elf_find_section_by_name(out_ef, ".text");
+	Elf64_Off text_offset = sec_text->sh_offset;
+	Elf64_Off text_end = text_offset + sec_text->sh_size;
+
+	for (Elf64_Off cur_offset = text_offset; cur_offset < text_end; cur_offset += ARM64_INSN_LEN) {
+		unsigned binary = elf_read_u32(out_ef, cur_offset);
+		unsigned long cur_addr = get_branch_addr(binary, cur_offset);
+		if (cur_addr != origin_addr)
+			continue;
+		unsigned new_binary = gen_branch_binary(binary, target_addr, cur_offset);
+		elf_write_u32(out_ef, cur_offset, new_binary);
+	}
+}
+
+void replace_malloc(elf_link_t *elf_link)
+{
+	if (strcmp("bash.rto", si_basename(elf_link->out_ef.file_name)) != 0) {
+		return;
+	}
+
+	replace_symbol(elf_link, "__malloc", "malloc");
+	replace_symbol(elf_link, "__free", "free");
 }

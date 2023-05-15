@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MulanPSL-2.0 */
+#include <dlfcn.h>
 #include <elf.h>
 #include <fcntl.h>
 #include <link.h>
@@ -14,6 +15,47 @@
 #include "si_common.h"
 #include "si_debug.h"
 #include "si_log.h"
+
+static char *special_dynsyms[] = {
+    "__pointer_chk_guard",
+    "_ITM_deregisterTMCloneTable",
+    "__cxa_finalize",
+    "__gmon_start__",
+    "_ITM_registerTMCloneTable",
+    "__pthread_initialize_minimal",
+    "__call_tls_dtors",
+    "__pthread_unwind",
+    "__mq_notify_fork_subprocess",
+    "__timer_fork_subprocess",
+};
+#define SPECIAL_DYNSYMS_LEN (sizeof(special_dynsyms) / sizeof(special_dynsyms[0]))
+
+bool is_symbol_maybe_undefined(const char *name)
+{
+	// some special symbols are ok even if they are undefined, skip them
+	for (unsigned i = 0; i < SPECIAL_DYNSYMS_LEN; i++) {
+		if (elf_is_same_symbol_name(name, special_dynsyms[i]))
+			return true;
+	}
+
+	return false;
+}
+
+bool is_gnu_weak_symbol(Elf64_Sym *sym)
+{
+	// IN normal ELF
+	// 5: 0000000000000000     0 FUNC    WEAK   DEFAULT  UND __cxa_finalize@GLIBC_2.17 (3)
+	if ((ELF64_ST_BIND(sym->st_info) == STB_WEAK) && (sym->st_shndx == SHN_UNDEF)) {
+		return true;
+	}
+	// IN libc ELF
+	// 3441: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND _ITM_registerTMCloneTable
+	if ((ELF64_ST_TYPE(sym->st_info) == STT_NOTYPE) && (sym->st_shndx == SHN_UNDEF)) {
+		return true;
+	}
+
+	return false;
+}
 
 // symbol_name string can not change
 void append_symbol_mapping(elf_link_t *elf_link, char *symbol_name, unsigned long symbol_addr)
@@ -39,7 +81,49 @@ unsigned long get_new_addr_by_symbol_mapping(elf_link_t *elf_link, char *symbol_
 		}
 	}
 
-	return 0UL;
+	return NOT_FOUND;
+}
+
+static void append_symbol_mapping_by_name(elf_link_t *elf_link, char *key, elf_file_t *ef, char *sym_name)
+{
+	unsigned long old_sym_addr = find_sym_old_addr(ef, sym_name);
+	unsigned long new_sym_addr = get_new_addr_by_old_addr(elf_link, ef, old_sym_addr);
+	append_symbol_mapping(elf_link, key, new_sym_addr);
+}
+
+
+static void init_ifunc_symbol_addr(elf_link_t *elf_link)
+{
+	(void)elf_link;
+}
+
+static void init_hook_func_symbol_change(elf_link_t *elf_link)
+{
+	if (is_hook_func(elf_link) == false) {
+		return;
+	}
+
+	// jump hook func, in libhook do not hook it, use real func
+	elf_file_t *ef = elf_link->hook_func_ef;
+	append_symbol_mapping_by_name(elf_link, "dlopen", ef, "__hook_dlopen");
+	append_symbol_mapping_by_name(elf_link, "dlclose", ef, "__hook_dlclose");
+	append_symbol_mapping_by_name(elf_link, "dlsym", ef, "__hook_dlsym");
+}
+
+static void init_static_mode_symbol_change(elf_link_t *elf_link)
+{
+	if (is_static_mode(elf_link) == false) {
+		return;
+	}
+
+	// static mode, template or ld.so need jump to app main func
+	elf_file_t *ef = get_main_ef(elf_link);
+	append_symbol_mapping_by_name(elf_link, "main", ef, "main");
+
+	// Here is an inelegant optimization for bash that cancels all resource release procedures in the
+	// exit process, and directly calls the _Exit function to end the process.
+	ef = get_template_ef(elf_link);
+	append_symbol_mapping_by_name(elf_link, "exit", ef, "_exit");
 }
 
 // layout for vdso and out.ELF
@@ -60,7 +144,7 @@ void init_vdso_symbol_addr(elf_link_t *elf_link)
 {
 	elf_file_t *vdso_ef = &elf_link->vdso_ef;
 
-	// TODO: probe AUX parameter
+	// TODO: feature, probe AUX parameter
 	elf_link->direct_vdso_optimize = false;
 
 	vdso_ef->file_name = "vdso";
@@ -88,6 +172,19 @@ void init_vdso_symbol_addr(elf_link_t *elf_link)
 	}
 
 	return;
+}
+
+void init_symbol_mapping(elf_link_t *elf_link)
+{
+	// Assume that ifunc function name is unique
+	init_ifunc_symbol_addr(elf_link);
+
+	init_static_mode_symbol_change(elf_link);
+	init_hook_func_symbol_change(elf_link);
+
+	if (is_direct_vdso_optimize(elf_link) == true) {
+		init_vdso_symbol_addr(elf_link);
+	}
 }
 
 void show_sec_mapping(elf_link_t *elf_link)
@@ -375,9 +472,18 @@ static unsigned long _get_new_addr_by_sym_name(elf_link_t *elf_link, char *sym_n
 	Elf64_Sym *sym = NULL;
 	int sym_count;
 
-	// TODO: Refactoring is required to find its own symbol integration.
-	// The sequence of searching symbols is self, template, dynsym, and others
-	// Only the template file does not contain dynsym
+	for (int i = 1; i < count; i++) {
+		ef = &elf_link->in_efs[i];
+		sym_count = ef->symtab_sec->sh_size / sizeof(Elf64_Sym);
+		Elf64_Sym *syms = (Elf64_Sym *)(((void *)ef->hdr) + ef->symtab_sec->sh_offset);
+		for (int j = 0; j < sym_count; j++) {
+			sym = &syms[j];
+			char *name = elf_get_symbol_name(ef, sym);
+			if (elf_is_same_symbol_name(sym_name, name) && sym->st_shndx != SHN_UNDEF)
+				goto out;
+		}
+	}
+
 	ef = get_template_ef(elf_link);
 	sym_count = ef->symtab_sec->sh_size / sizeof(Elf64_Sym);
 	Elf64_Sym *syms = (Elf64_Sym *)(((void *)ef->hdr) + ef->symtab_sec->sh_offset);
@@ -386,19 +492,6 @@ static unsigned long _get_new_addr_by_sym_name(elf_link_t *elf_link, char *sym_n
 		char *name = elf_get_symbol_name(ef, sym);
 		if (elf_is_same_symbol_name(sym_name, name) && sym->st_shndx != SHN_UNDEF)
 			goto out;
-	}
-
-	// pubilc func sym is in dynsym
-	for (int i = 0; i < count; i++) {
-		ef = &elf_link->in_efs[i];
-		sym_count = ef->dynsym_sec->sh_size / sizeof(Elf64_Sym);
-		Elf64_Sym *syms = (Elf64_Sym *)(((void *)ef->hdr) + ef->dynsym_sec->sh_offset);
-		for (int j = 0; j < sym_count; j++) {
-			sym = &syms[j];
-			char *name = elf_get_dynsym_name(ef, sym);
-			if (elf_is_same_symbol_name(sym_name, name) && sym->st_shndx != SHN_UNDEF)
-				goto out;
-		}
 	}
 
 	if (elf_link->dynamic_link == false)
@@ -411,6 +504,43 @@ out:
 	return get_new_addr_by_old_addr(elf_link, ef, sym->st_value);
 }
 
+static unsigned long _get_ifunc_new_addr_by_dl(elf_link_t *elf_link, elf_file_t *ef, char *sym_name)
+{
+	// find ifunc real addr
+	// dlopen cannot dynamically load position-independent executable
+	elf_file_t *template_ef = get_template_ef(elf_link);
+	if (template_ef == ef) {
+		// use libc.so
+		ef = elf_link->libc_ef;
+		// libc.so has func __memchr __strlen, but dlsym can not found it
+		if (strcmp(sym_name, "__memchr") == 0) {
+			sym_name = "memchr";
+		}
+		if (strcmp(sym_name, "__strlen") == 0) {
+			sym_name = "strlen";
+		}
+	}
+	void *handle = dlopen(ef->file_name, RTLD_NOW);
+	if (!handle) {
+		si_panic("%s\n", dlerror());
+	}
+	dlerror();
+
+	// lookup function from lib
+	unsigned long func = (unsigned long)dlsym(handle, sym_name);
+	char *error = dlerror();
+	if (error != NULL) {
+		si_panic("%s\n", error);
+	}
+
+	// handle point to link_map, link_map->l_addr is base addr of ELF
+	unsigned long old_addr = func - *(unsigned long *)handle;
+	SI_LOG_DEBUG("func %s %016lx\n", sym_name, old_addr);
+
+	return get_new_addr_by_old_addr(elf_link, ef, old_addr);
+}
+
+
 static char *ifunc_mapping[][2] = {
     {"memmove", "__memmove_generic"},
     {"memchr", "__memchr_generic"},
@@ -421,12 +551,12 @@ static char *ifunc_mapping[][2] = {
     {"memcpy", "__memcpy_generic"},
 };
 #define IFUNC_MAPPING_LEN (sizeof(ifunc_mapping) / sizeof(ifunc_mapping[0]))
+
 static unsigned long _get_ifunc_new_addr(elf_link_t *elf_link, char *sym_name)
 {
-	// TODO: use ifunc return value
-	// only support for 1620
 	SI_LOG_DEBUG("ifunc to real func %s\n", sym_name);
 
+	// func in PIE app, can not dl, so find by name
 	for (unsigned i = 0; i < IFUNC_MAPPING_LEN; i++) {
 		if (elf_is_same_symbol_name(sym_name, ifunc_mapping[i][0]))
 			return _get_new_addr_by_sym_name(elf_link, ifunc_mapping[i][1]);
@@ -434,6 +564,20 @@ static unsigned long _get_ifunc_new_addr(elf_link_t *elf_link, char *sym_name)
 
 	si_panic("ifunc %s is not known\n", sym_name);
 	return 0;
+}
+
+static unsigned long append_ifunc_symbol(elf_link_t *elf_link, elf_file_t *ef, char *sym_name)
+{
+	unsigned long ret;
+	if (is_nolibc_mode(elf_link))
+		ret = _get_ifunc_new_addr(elf_link, sym_name);
+	else
+		// use ifunc return value
+		ret = _get_ifunc_new_addr_by_dl(elf_link, ef, sym_name);
+	append_symbol_mapping(elf_link, sym_name, ret);
+	SI_LOG_DEBUG("ifunc %s %16lx\n", sym_name, ret);
+
+	return ret;
 }
 
 unsigned long find_sym_old_addr(elf_file_t *ef, char *sym_name)
@@ -447,24 +591,14 @@ unsigned long find_sym_old_addr(elf_file_t *ef, char *sym_name)
 			return sym->st_value;
 		}
 	}
-	si_panic("can not find sym, %s\n", sym_name);
+	si_panic("can not find sym, %s %s\n", ef->file_name, sym_name);
 	return 0;
 }
 
-bool is_gnu_weak_symbol(Elf64_Sym *sym)
+unsigned long find_sym_new_addr(elf_link_t *elf_link, elf_file_t *ef, char *sym_name)
 {
-	// IN normal ELF
-	// 5: 0000000000000000     0 FUNC    WEAK   DEFAULT  UND __cxa_finalize@GLIBC_2.17 (3)
-	if ((ELF64_ST_BIND(sym->st_info) == STB_WEAK) && (sym->st_shndx == SHN_UNDEF)) {
-		return true;
-	}
-	// IN libc ELF
-	// 3441: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND _ITM_registerTMCloneTable
-	if ((ELF64_ST_TYPE(sym->st_info) == STT_NOTYPE) && (sym->st_shndx == SHN_UNDEF)) {
-		return true;
-	}
-
-	return false;
+	unsigned long old_addr = find_sym_old_addr(ef, sym_name);
+	return get_new_addr_by_old_addr(elf_link, ef, old_addr);
 }
 
 static unsigned long _get_new_addr_by_sym(elf_link_t *elf_link, elf_file_t *ef,
@@ -477,34 +611,21 @@ static unsigned long _get_new_addr_by_sym(elf_link_t *elf_link, elf_file_t *ef,
 		sym_name = elf_get_symbol_name(ef, sym);
 	}
 
-	// jump hook func, in libhook do not hook it, use real func
-	if (elf_link->hook_func && (strcmp(LIBHOOK, si_basename(ef->file_name)) != 0)) {
-		if (elf_is_same_symbol_name(sym_name, "dlopen")) {
-			sym_name = "__hook_dlopen";
-		} else if (elf_is_same_symbol_name(sym_name, "dlclose")) {
-			sym_name = "__hook_dlclose";
-		} else if (elf_is_same_symbol_name(sym_name, "dlsym")) {
-			sym_name = "__hook_dlsym";
-		}
-	}
-
 	// WEAK func is used by GNU debug, libc do not have that func
 	if (is_gnu_weak_symbol(sym) == true) {
 		return 0;
 	}
 
-	if (is_direct_call_optimize(elf_link) == true) {
-		// IFUNC find real function
-		if (ELF64_ST_TYPE(sym->st_info) == STT_GNU_IFUNC) {
-			return _get_ifunc_new_addr(elf_link, sym_name);
-		}
+	if (is_symbol_maybe_undefined(sym_name)) {
+		return 0;
 	}
 
-	if (is_direct_vdso_optimize(elf_link) == true) {
-		unsigned long ret = get_new_addr_by_symbol_mapping(elf_link, sym_name);
-		if (ret != 0UL) {
-			return ret;
-		}
+	unsigned long ret = get_new_addr_by_symbol_mapping(elf_link, sym_name);
+	if (ret != NOT_FOUND) {
+		return ret;
+	}
+	if (is_direct_call_optimize(elf_link) && (ELF64_ST_TYPE(sym->st_info) == STT_GNU_IFUNC)) {
+		return append_ifunc_symbol(elf_link, ef, sym_name);
 	}
 
 	// When the shndx != SHN_UNDEF, the symbol in this ELF.

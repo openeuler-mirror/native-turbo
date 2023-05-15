@@ -103,7 +103,13 @@ static void modify_rela_to_RELATIVE(elf_link_t *elf_link, elf_file_t *src_ef, El
 	// some symbol do not export in .dynsym, change to R_AARCH64_RELATIVE
 	Elf64_Sym *sym = elf_get_dynsym_by_rela(src_ef, src_rela);
 	dst_rela->r_addend = get_new_addr_by_dynsym(elf_link, src_ef, sym);
+
+#ifdef __aarch64__
 	dst_rela->r_info = ELF64_R_INFO(0, ELF64_R_TYPE(R_AARCH64_RELATIVE));
+#else
+	dst_rela->r_info = ELF64_R_INFO(0, ELF64_R_TYPE(R_X86_64_RELATIVE));
+#endif
+
 	// offset modify by caller
 }
 
@@ -132,14 +138,17 @@ void modify_rela_dyn_item(elf_link_t *elf_link, elf_file_t *src_ef, Elf64_Rela *
 			// 48: 0000000000004000  4096 OBJECT  GLOBAL DEFAULT   27 ___g_so_path_list
 			new_index = ELF64_R_SYM(dst_rela->r_info);
 			const char *sym_name = get_sym_name_dynsym(&elf_link->out_ef, new_index);
-			if (elf_is_same_symbol_name(sym_name, "___g_so_path_list") == false) {
+			if (elf_is_same_symbol_name(sym_name, "___g_so_path_list")) {
+				// when ELF load, real addr will set
+				dst_rela->r_info = ELF64_R_INFO(new_index, ELF64_R_TYPE(R_X86_64_RELATIVE));
+				dst_rela->r_addend = (unsigned long)elf_link->so_path_struct;
 				break;
 			}
-
-			// when ELF load, real addr will set
-			dst_rela->r_info = ELF64_R_INFO(new_index, ELF64_R_TYPE(R_X86_64_RELATIVE));
-			dst_rela->r_addend = (unsigned long)elf_link->so_path_struct;
 		}
+		fallthrough;
+	case R_AARCH64_GLOB_DAT:
+		// some symbol do not export in .dynsym, change to R_AARCH64_RELATIVE
+		modify_rela_to_RELATIVE(elf_link, src_ef, src_rela, dst_rela);
 		break;
 	case R_X86_64_RELATIVE:
 	case R_AARCH64_RELATIVE:
@@ -148,12 +157,10 @@ void modify_rela_dyn_item(elf_link_t *elf_link, elf_file_t *src_ef, Elf64_Rela *
 	case R_X86_64_64:
 	case R_AARCH64_ABS64:
 		break;
-	case R_AARCH64_GLOB_DAT:
-		// some symbol do not export in .dynsym, change to R_AARCH64_RELATIVE
-		modify_rela_to_RELATIVE(elf_link, src_ef, src_rela, dst_rela);
-		break;
 	case R_AARCH64_TLS_TPREL:
-		dst_rela->r_addend = src_rela->r_addend;
+		// all TLS got entry will be modified directly when processing instructions later,
+		// so no .dyn.rela entry is needed.
+		dst_rela->r_info = ELF64_R_INFO(0, R_AARCH64_NONE);
 		break;
 	case R_AARCH64_COPY:
 		// Variables in the bss section, some from glibc, some declared by the application
@@ -194,7 +201,7 @@ void modify_got(elf_link_t *elf_link)
 	void *got_addr = NULL;
 
 	// got[0] is .dynamic addr
-	// TODO: aarch64 got[0] is zero when link
+	// TODO: clean code, aarch64 got[0] is zero when link
 	got_addr = ((void *)elf_link->out_ef.hdr) + got_sec->sh_offset;
 	if (elf_link->dynamic_link) {
 		*(unsigned long *)got_addr = find_sec->sh_addr;

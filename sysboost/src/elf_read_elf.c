@@ -16,6 +16,12 @@
 #include <si_debug.h>
 #include <si_log.h>
 
+#ifdef __aarch64__
+#define LOCAL_RUNNING_ARCH EM_AARCH64
+#else
+#define LOCAL_RUNNING_ARCH EM_X86_64
+#endif
+
 #define DEBUG_SEC_PRE_NAME ".debug_"
 
 // cmp symbol name without sym version
@@ -448,13 +454,19 @@ void elf_parse_hdr(elf_file_t *ef)
 	read_elf_rel(ef);
 }
 
-static int read_elf_info(int fd, elf_file_t *ef)
+static int read_elf_info(int fd, elf_file_t *ef, bool is_readonly)
 {
 	int ret;
 	void *buf;
 
 	ret = lseek(fd, 0, SEEK_END);
-	buf = mmap(0, ret, PROT_READ, MAP_PRIVATE, fd, 0);
+	int prot = PROT_READ;
+	int flags = MAP_PRIVATE;
+	if (is_readonly == false) {
+		prot |= PROT_WRITE;
+		flags = MAP_SHARED;
+	}
+	buf = mmap(0, ret, prot, flags, fd, 0);
 	SI_LOG_DEBUG("ELF len %d, buf addr 0x%08lx\n", ret, (unsigned long)buf);
 
 	ef->hdr = (Elf64_Ehdr *)buf;
@@ -531,12 +543,16 @@ static int read_extern_rel(elf_file_t *ef)
 	return 0;
 }
 
-int elf_read_file(char *file_name, elf_file_t *ef)
+int elf_read_file(char *file_name, elf_file_t *ef, bool is_readonly)
 {
 	int fd = -1;
 	int ret = 0;
+	int flags = O_RDONLY;
 
-	fd = open(file_name, O_RDONLY);
+	if (is_readonly == false)
+		flags = O_RDWR;
+
+	fd = open(file_name, flags);
 	if (fd == -1) {
 		SI_LOG_ERR("open %s fail\n", file_name);
 		ret = -1;
@@ -545,14 +561,22 @@ int elf_read_file(char *file_name, elf_file_t *ef)
 	ef->fd = fd;
 	ef->file_name = strdup(file_name);
 
-	ret = read_elf_info(fd, ef);
+	ret = read_elf_info(fd, ef, is_readonly);
 	if (ret != 0) {
-		si_panic("read_elf_info fail, %s\n", file_name);
+		SI_LOG_ERR("read_elf_info fail, %s\n", file_name);
+		return -1;
+	}
+
+	// check elf arch
+	if (ef->hdr->e_machine != LOCAL_RUNNING_ARCH) {
+		SI_LOG_ERR("ELF arch is wrong, %s\n", file_name);
+		return -1;
 	}
 
 	// ELF must pie, we read insn with offset
 	if (ef->hdr_Phdr->p_vaddr != 0UL) {
-		si_panic("ELF must compile with pie, %s\n", file_name);
+		SI_LOG_ERR("ELF must compile with pie, %s\n", file_name);
+		return -1;
 	}
 
 	// check rel
@@ -562,7 +586,8 @@ int elf_read_file(char *file_name, elf_file_t *ef)
 
 	// ELF must have relocation
 	if (!ef->rel) {
-		si_panic("ELF must have .rela.text, %s\n", file_name);
+		SI_LOG_ERR("ELF must have .rela.text, %s\n", file_name);
+		return -1;
 	}
 
 out:

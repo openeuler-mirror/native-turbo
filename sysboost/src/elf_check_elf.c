@@ -34,20 +34,10 @@ static void check_data_section_addr(elf_file_t *out_ef)
 	}
 }
 
-static char *special_dynsyms[] = {
-    "_ITM_deregisterTMCloneTable",
-    "__cxa_finalize",
-    "__gmon_start__",
-    "_ITM_registerTMCloneTable",
-};
-#define SPECIAL_DYNSYMS_LEN (sizeof(special_dynsyms) / sizeof(special_dynsyms[0]))
-
 static bool is_dynsym_valid(Elf64_Sym *sym, const char *name)
 {
-	// some special symbols are ok even if they are undefined, skip them
-	for (unsigned i = 0; i < SPECIAL_DYNSYMS_LEN; i++) {
-		if (elf_is_same_symbol_name(name, special_dynsyms[i]))
-			return true;
+	if (is_symbol_maybe_undefined(name)) {
+		return true;
 	}
 
 	if (sym->st_shndx == SHN_UNDEF)
@@ -77,7 +67,7 @@ static void check_rela_dyn(elf_link_t *elf_link)
 		Elf64_Sym *sym = elf_get_dynsym_by_rela(out_ef, rela);
 		const char *sym_name = elf_get_dynsym_name(out_ef, sym);
 		if (is_dynsym_valid(sym, sym_name) == false) {
-			si_panic("%s is UND\n", sym_name);
+			SI_LOG_EMERG("%s is UND\n", sym_name);
 		}
 	}
 }

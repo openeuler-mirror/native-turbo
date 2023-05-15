@@ -18,13 +18,14 @@
 #include "si_debug.h"
 #include "si_log.h"
 
+// mode: static share
 elf_link_t *elf_link_new()
 {
 	elf_link_t *elf_link = NULL;
 
 	elf_link = malloc(sizeof(elf_link_t));
 	if (!elf_link) {
-		si_panic("malloc fail\n");
+		SI_LOG_ERR("malloc fail\n");
 		return NULL;
 	}
 	bzero(elf_link, sizeof(elf_link_t));
@@ -51,13 +52,23 @@ elf_link_t *elf_link_new()
 	return elf_link;
 }
 
-int elf_link_set_file_name(elf_link_t *elf_link, char *file_name)
+void elf_link_set_mode(elf_link_t *elf_link, unsigned int mode)
 {
-	if (file_name == NULL) {
-		si_panic("file_name is NULL\n");
-		return -1;
+	if (mode != ELF_LINK_STATIC) {
+		return;
 	}
-	return create_elf_file(file_name, &elf_link->out_ef);
+
+	elf_link->dynamic_link = false;
+	elf_link->direct_call_optimize = true;
+	// TODO: feature, probe AUX parameter
+	elf_link->direct_vdso_optimize = false;
+
+	if (elf_link->in_ef_nr != 0) {
+		si_panic("set mode must before add elf file\n");
+	}
+
+	// static mode use template
+	elf_link_add_infile(elf_link, "/usr/bin/sysboost_static_template");
 }
 
 static int elf_link_prepare(elf_link_t *elf_link)
@@ -74,15 +85,30 @@ static int elf_link_prepare(elf_link_t *elf_link)
 	return create_elf_file(name, &elf_link->out_ef);
 }
 
-int elf_link_add_infile(elf_link_t *elf_link, char *name)
+elf_file_t *elf_link_add_infile(elf_link_t *elf_link, char *path)
 {
-	int ret = elf_read_file(name, &elf_link->in_efs[elf_link->in_ef_nr]);
+	elf_file_t *ef = &elf_link->in_efs[elf_link->in_ef_nr];
+	int ret = elf_read_file(path, ef, true);
 	if (ret != 0) {
-		return ret;
+		return NULL;
 	}
 	elf_link->in_ef_nr++;
 
-	return 0;
+	// TODO: clean code, add param -hook
+	if (strcmp(LIBHOOK, si_basename(path)) == 0) {
+		elf_link->hook_func = true;
+		elf_link->hook_func_ef = ef;
+		SI_LOG_DEBUG("hook func\n");
+	}
+
+	// TODO: clean code, do not use libc_ef
+	if (strcmp("libc.so", si_basename(path)) == 0) {
+		elf_link->libc_ef = ef;
+	}
+
+	// TODO: feature, zk--- recursion add dep lib
+
+	return ef;
 }
 
 void copy_elf_file(elf_file_t *in, off_t in_offset, elf_file_t *out, off_t out_offset, size_t len)
@@ -146,10 +172,9 @@ static bool is_section_needed(elf_link_t *elf_link, elf_file_t *ef, Elf64_Shdr *
 	return false;
 
 	/*
-	TODO: below is original implementation, don't have any effect now
+	TODO: clean code, below is original implementation, don't have any effect now
 	if ((sec->sh_type == SHT_RELA) && (!(sec->sh_flags & SHF_ALLOC)))
 		return false;
-	// TODO: fix symbol version
 	if (sec->sh_type == SHT_GNU_versym || sec->sh_type == SHT_GNU_verdef ||
 	    sec->sh_type == SHT_GNU_verneed)
 		return false;
@@ -917,7 +942,7 @@ static int dynamic_copy_obj(elf_link_t *elf_link, Elf64_Dyn *begin_dyn, int len)
 			if (elf_link->delete_symbol_version) {
 				continue;
 			}
-			// TODO: symbol version DT_VERNEEDNUM
+			// TODO: feature, symbol version DT_VERNEEDNUM
 			fallthrough;
 		default:
 			*dst_dyn = *dyn;
@@ -1268,13 +1293,14 @@ char *disabled_funcs[] = {
 };
 #define DISABLED_FUNCS_LEN (sizeof(disabled_funcs) / sizeof(disabled_funcs[0]))
 #define AARCH64_INSN_RET 0xD65F03C0
+#define X86_64_INSN_RET 0xC3
 static void modify_init_and_fini(elf_link_t *elf_link)
 {
 	if (elf_link->dynamic_link == true) {
 		return;
 	}
 	Elf64_Ehdr *hdr = elf_link->out_ef.hdr;
-	if (hdr->e_machine != EM_AARCH64) {
+	if (hdr->e_machine != EM_AARCH64 && hdr->e_machine != EM_X86_64) {
 		si_panic("e_machine not support\n");
 	}
 
@@ -1286,12 +1312,18 @@ static void modify_init_and_fini(elf_link_t *elf_link)
 	for (unsigned j = 0; j < DISABLED_FUNCS_LEN; j++) {
 		Elf64_Sym *sym = elf_find_symbol_by_name(ef, disabled_funcs[j]);
 		unsigned long addr = get_new_addr_by_sym(elf_link, ef, sym);
-		elf_write_u32(out_ef, addr, AARCH64_INSN_RET);
+		if (hdr->e_machine == EM_AARCH64) {
+			elf_write_u32(out_ef, addr, AARCH64_INSN_RET);
+		} else {
+			elf_write_u8(out_ef, addr, X86_64_INSN_RET);
+		}
 	}
 }
 
 static void do_special_adapts(elf_link_t *elf_link)
 {
+	if (is_nolibc_mode(elf_link))
+		replace_malloc(elf_link);
 	modify_init_and_fini(elf_link);
 	correct_stop_libc_atexit(elf_link);
 }
@@ -1384,9 +1416,7 @@ void elf_link_write(elf_link_t *elf_link)
 	// .rela.plt .plt.got
 	modify_got(elf_link);
 
-	if (is_direct_vdso_optimize(elf_link) == true) {
-		init_vdso_symbol_addr(elf_link);
-	}
+	init_symbol_mapping(elf_link);
 
 	// modify local call to use jump
 	// .rela.init .rela.text .rela.rodata .rela.tdata .rela.init_array .rela.data
