@@ -38,7 +38,7 @@ int si_hashmap_insert(si_hashmap_t *_map, char *key, void *data)
 {
 	_si_hashmap_t *map = (_si_hashmap_t *)_map;
 
-	// TODO
+	// TODO: feature
 	(void)map;
 	(void)key;
 	(void)data;
@@ -50,7 +50,7 @@ void *si_hashmap_find(si_hashmap_t *_map, char *key)
 {
 	_si_hashmap_t *map = (_si_hashmap_t *)_map;
 
-	// TODO
+	// TODO: feature
 	(void)map;
 	(void)key;
 

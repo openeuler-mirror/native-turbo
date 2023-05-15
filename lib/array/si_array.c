@@ -24,7 +24,7 @@ si_array_t *si_array_new(uint32_t elem_size)
 	if (elem_size == 0)
 		return NULL;
 
-	// TODO: check MAX size
+	// TODO: bug, check MAX size
 
 	arr = malloc(sizeof(_si_array_t));
 	if (!arr)
@@ -50,7 +50,7 @@ static void si_array_maybe_expand(_si_array_t *arr, uint32_t elem_nr)
 	uint32_t need_len;
 	void *tmp;
 
-	// TODO: check MAX size
+	// TODO: bug, check MAX size
 
 	need_len = arr->len + elem_nr;
 	if (need_len <= arr->eltm_capacity)
