@@ -113,7 +113,6 @@ static int rewrite_section_headers(struct elf_info *info)
 
 static int resolve_symbol(const char *name, Elf64_Addr *st_value)
 {
-	// TODO
 	// dl_lookup_symbol_x(name, match, &ref, match->l_scope, vers, 0, flags | DL_LOOKUP_ADD_DEPENDENCY, NULL);
 	char buf[32] = {0};
 	for (int i = 0;; i++) {
@@ -158,7 +157,6 @@ static int simplify_symbols(struct elf_info *info)
 			if (ELF64_ST_TYPE(sym->st_info) == STT_FUNC) {
 				secbase = (unsigned long)info->text_vhdr;
 			}
-			// TODO: rodata
 			// local ELF OBJECT
 			if (ELF64_ST_TYPE(sym->st_info) == STT_OBJECT) {
 				secbase = (unsigned long)info->rodata_vhdr;
@@ -223,7 +221,6 @@ static int apply_relocate_add(Elf64_Shdr *shdr, struct elf_info *info)
 			if (ELF64_ST_TYPE(sym->st_info) == STT_FUNC)
 				break;
 			// STT_OBJECT
-			// TODO: direct mov, do not use lea
 			fallthrough;
 		case R_X86_64_GOTPCREL:
 		case R_X86_64_REX_GOTPCRELX:

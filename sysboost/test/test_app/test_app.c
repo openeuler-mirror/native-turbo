@@ -83,7 +83,7 @@ void test_local_ELF_func(void)
 	run_b(1, 2);
 }
 
-// TODO: constructor func for new elf will do again, but old elf just once
+// TODO: bug, constructor func for new elf will do again, but old elf just once
 void test_dlsym_from_lib(void)
 {
 	void *handle;
@@ -172,6 +172,71 @@ void test_IFUNC(void)
 	memcpy(dest, src, sizeof(dest));
 	if (dest[10] == 'x')
 		printf("%s: error\n", __func__);
+
+	// x86
+	/*strcpy();
+	__strnlen();
+	memmove();
+	__rawmemchr();
+	__wcschr();
+	strrchr();
+	strcat();
+	memchr();
+	__wcscmp();
+	strstr();
+	strncmp();
+	strncpy();
+	memcmp();
+	__strcasecmp_l();
+	__wmemchr();
+	memset();
+	strcmp();
+	__wmemset();
+	strcspn();
+	__wcscpy();
+	__strncasecmp_l();
+	__strcasecmp();
+	strspn();
+	strlen();
+	strchr();
+	__stpncpy();
+	strpbrk();
+	stpcpy();
+	bcmp();
+	wcslen();
+	memcpy();
+	__strncasecmp();
+	wcsncmp();
+	mempcpy();
+	__wcslen();
+	strncasecmp();
+	strnlen();
+	rawmemchr();
+	wcscpy();
+	strcasecmp_l();
+	rindex();
+	wmemchr();
+	__stpcpy();
+	__strchrnul();
+	__wmemcmp();
+	wmemset();
+	strcasecmp();
+	__libc_strstr();
+	wcsnlen();
+	strncat();
+	wcschr();
+	index();
+	__wcsnlen();
+	__memchr();
+	__mempcpy();
+	strncasecmp_l();
+	__new_memcpy();
+	wmemcmp();
+	stpncpy();
+	wcscmp();
+	__libc_memmove();
+	__strncat();
+	strchrnul();*/
 }
 
 void test_vdso(void)

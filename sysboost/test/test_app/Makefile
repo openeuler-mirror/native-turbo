@@ -7,6 +7,7 @@ TEST_APP=$(BUILD_DIR)sysboost/test/test_app/test_app
 LIB1=$(BUILD_DIR)sysboost/test/test_app/libutil1.so
 LIB2=$(BUILD_DIR)sysboost/test/test_app/libutil2.so
 LIBHOOK=$(BUILD_DIR)sysboost/src/libhook/libhook.so
+LIBC=../bash/libc.so
 
 TEMPLATE_FILE_PUB_PATH=/usr/bin/sysboost_static_template
 
@@ -51,23 +52,25 @@ test-s: static_template_debug
 	objdump -d $(TEST_APP) > test_app.asm
 	readelf -W -a $(LIB1) > libutil1.so.elf
 	objdump -d $(LIB1) > libutil1.so.asm
-	clear
-	@echo ===rto===
 	cp -f $(TEMPLATE_FILE) $(TEMPLATE_FILE_PUB_PATH)
-	$(SYSBOOST) -static $(TEST_APP) $(LIB1) $(LIB2)
+	clear
+	@echo ===rto-s===
+	$(SYSBOOST) -static $(TEST_APP) $(LIB1) $(LIB2) $(LIBC)
 	readelf -W -a test_app.rto > test_app.rto.elf
 	objdump -d test_app.rto > test_app.rto.asm
-	@echo ===run_ori===
+	@echo ===run-ori===
 	$(TEST_APP)
-	@echo ===run===
+	@echo ===run-s===
 	./test_app.rto
 
 rto-s:
-	gdb --args $(SYSBOOST) -static $(TEST_APP) $(LIB1) $(LIB2)
+	gdb --args $(SYSBOOST) -static $(TEST_APP) $(LIB1) $(LIB2) $(LIBC)
 
-run:
+run-s:
 	gdb --args ./test_app.rto
 
 env:
 	echo 0 > /proc/sys/kernel/randomize_va_space
 	cat /proc/sys/kernel/randomize_va_space
+	readelf -W -a $(LIBC) > libc.so.elf
+	objdump -d $(LIBC) > libc.so.asm

@@ -3,6 +3,7 @@ ROOT_DIR=../../../
 BUILD_DIR=$(ROOT_DIR)build/
 TEMPLATE_FILE=$(BUILD_DIR)sysboost/src/static_template/sysboost_static_template
 SYSBOOST=$(BUILD_DIR)sysboost/sysboost
+LIBC=libc.so
 
 TEMPLATE_FILE_PUB_PATH=/usr/bin/sysboost_static_template
 
@@ -17,17 +18,17 @@ static_template_debug:
 # simple test with template
 bash: static_template_debug
 	make -C $(ROOT_DIR)
+	cp -f $(TEMPLATE_FILE) $(TEMPLATE_FILE_PUB_PATH)
 	clear
 	@echo ===rto===
-	cp -f $(TEMPLATE_FILE) $(TEMPLATE_FILE_PUB_PATH)
-	$(SYSBOOST) -static bash libtinfo.so
+	$(SYSBOOST) -static bash libtinfo.so $(LIBC)
 	readelf -W -a bash.rto > bash.rto.elf
 	objdump -d bash.rto > bash.rto.asm
 	@echo ===run===
 	./bash.rto -c "echo 1"
 
 rto:
-	gdb --args $(SYSBOOST) -static bash libtinfo.so
+	gdb --args $(SYSBOOST) -static bash libtinfo.so $(LIBC)
 
 run:
 	gdb --args ./bash.rto -c "echo 1"
@@ -40,6 +41,5 @@ env:
 	cat /proc/sys/kernel/randomize_va_space
 	readelf -W -a bash > bash.elf
 	objdump -d bash > bash.asm
-
-install:
-	cp ./bash.rto /usr/bin/bash
+	readelf -W -a $(LIBC) > libc.so.elf
+	objdump -d $(LIBC) > libc.so.asm
