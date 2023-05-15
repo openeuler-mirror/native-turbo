@@ -29,7 +29,7 @@ struct si_ring {
 
 	char pad1 __si_cache_aligned; /**< empty cache line */
 
-	// TODO: if we need name?
+	// TODO: clean code, if we need name?
 	char *name;
 	int flags;
 	uint32_t size;
