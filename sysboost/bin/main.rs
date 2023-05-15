@@ -12,58 +12,29 @@
 mod daemon;
 
 use crate::daemon::daemon_loop;
+
 use std::env;
+use basic::logger::{self};
+use log::{self};
 
-fn set_print_log(_printlog: bool) {
-	// syslog.New(syslog.LOG_NOTICE, "sysboost")
-	// log.SetOutput(des)
-	println!("set_print_log");
-}
-
-fn set_log_level(_loglevel: u8) {
-	// log.SetLevel(loglevel)
-}
+const APP_NAME: &str = "sysboostd";
 
 fn main() {
 	let args: Vec<String> = env::args().collect();
 	let argc = args.len();
 
-	if argc == 1 {
-		println!("nothing to do");
-		return;
-	}
+	logger::init_log(APP_NAME, log::LevelFilter::Info, "syslog", None);
+	log::info!("{} running", APP_NAME);
 
-	// arg0 is program name, parameter is from arg1
-	let mut cur_arg = 1;
+	if argc != 1 {
+		// arg0 is program name, parameter is from arg1
+		let cur_arg = 1;
 
-	if args[cur_arg] == "-debug" {
-		set_log_level(8);
-		set_print_log(true);
-		cur_arg += 1;
-	} else {
-		set_log_level(7);
+		if args[cur_arg] == "-debug" {
+			logger::init_log_to_console(APP_NAME, log::LevelFilter::Debug);
+		}
 	}
 
 	// daemon service gen rto ELF with config
-	if args[cur_arg] == "-daemon" {
-		daemon_loop();
-		return;
-	}
-
-	// -static parameter is used to determine whether static file generated
-	if args[cur_arg] == "-static" {
-		// TODO:
-		// "/usr/bin/sysboost_static_template"
-		// "/usr/lib64/libtinfo.so"
-		println!("static mode");
-		cur_arg += 1;
-	}
-
-	while cur_arg < argc {
-		// TODO:
-		println!("arg {}", args[cur_arg]);
-		cur_arg += 1;
-	}
-
-	println!("OK");
+	daemon_loop();
 }

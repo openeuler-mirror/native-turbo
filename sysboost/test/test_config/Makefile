@@ -9,4 +9,4 @@ test:
 	mkdir -p /etc/sysboost.d
 	cp -f app1.toml app2.toml bash.toml /etc/sysboost.d/
 	@echo ======
-	$(SYSBOOSTD) -daemon
+	$(SYSBOOSTD)
