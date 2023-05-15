@@ -10,10 +10,11 @@
 // Create: 2023-4-20
 
 use std::fs;
+use std::os::unix::fs as UnixFs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::process::{Command, Stdio};
+use std::process::{Stdio, Command};
 use serde::Deserialize;
 use std::thread;
 use std::time::Duration;
@@ -22,6 +23,7 @@ use log::{self};
 use std::io::{BufReader, BufRead};
 
 const SYSBOOST_PATH: &str = "/usr/bin/sysboost";
+const SYSBOOST_DB_PATH: &str = "/var/lib/sysboost/";
 
 // sleep some time wait for next event
 const MIN_SLEEP_TIME: u64 = 10;
@@ -46,6 +48,35 @@ impl FromStr for RtoConfig {
 	}
 }
 
+fn is_symlink(path: &PathBuf) -> bool {
+	let file_type = match fs::symlink_metadata(path) {
+		Ok(metadata) => metadata.file_type(),
+		Err(_) => { log::error!("get file type fail: {:?}", path.file_name()); return false; }
+	};
+
+	return file_type.is_symlink();
+}
+
+fn db_add_link(path: &String) -> i32 {
+	// symlink app.link to app
+	let link_path = format!("{}{}.link", SYSBOOST_DB_PATH, path);
+	let ret_e = UnixFs::symlink(&path, &link_path);
+	match ret_e {
+		Ok(_) => {},
+		Err(_) => { log::error!("symlink fail"); return -1; }
+	};
+
+	return 0;
+}
+
+fn db_remove_link(path: &String) {
+	let ret = fs::remove_file(&path);
+	match ret {
+		Ok(_) => return,
+		Err(e) => { log::error!("remove link fail: {}", e); }
+	};
+}
+
 fn run_child(cmd: &str, args: &Vec<String>) -> i32 {
     let mut child = match Command::new(cmd).args(args).stdout(Stdio::piped()).spawn() {
         Ok(child) => child,
@@ -63,9 +94,8 @@ fn run_child(cmd: &str, args: &Vec<String>) -> i32 {
     };
     let reader = BufReader::new(stdout);
 
-    // Record the command output to the system log
     for line in reader.lines() {
-        let line = line.unwrap_or_else(|_| "<read error>".to_owned());
+        let line = line.unwrap();
         log::info!("{}: {}", cmd, line);
     }
 
@@ -85,7 +115,6 @@ fn run_child(cmd: &str, args: &Vec<String>) -> i32 {
         }
     };
 
-    // If the subprocess fails to exit, record the error information in the system log
     if exit_code != 0 {
         log::error!("Command exited with code: {}", exit_code);
     }
@@ -102,9 +131,13 @@ fn gen_app_rto(conf: &RtoConfig) -> i32 {
 	return run_child(SYSBOOST_PATH, &args);
 }
 
-fn set_app_aot_flag(old_path: &String) -> i32 {
+fn set_app_aot_flag(old_path: &String, is_set: bool) -> i32 {
 	let mut args: Vec<String> = Vec::new();
-	args.push("-set".to_string());
+	if is_set {
+		args.push("-set".to_string());
+	} else {
+		args.push("-unset".to_string());
+	}
 	args.push(old_path.to_string());
 	return run_child(SYSBOOST_PATH, &args);
 }
@@ -113,11 +146,11 @@ fn set_app_aot_flag(old_path: &String) -> i32 {
 // mode = "static"
 // libs = "/usr/lib64/libtinfo.so.6"
 fn parse_config(contents: String) -> Option<RtoConfig> {
-	println!("config contents:\n{}", contents);
+	log::info!("config contents:\n{}", contents);
 	let conf_e = contents.parse::<RtoConfig>();
 	match conf_e {
-		Ok(ref c) => println!("parse config: {:?}", c),
-		Err(_) => { println!("parse config fail"); return None; }
+		Ok(ref c) => log::info!("parse config: {:?}", c),
+		Err(_) => { log::error!("parse config fail"); return None; }
 	};
 
 	let conf = conf_e.unwrap();
@@ -132,10 +165,9 @@ fn parse_config(contents: String) -> Option<RtoConfig> {
 	return Some(conf);
 }
 
-fn read_config(path: PathBuf) -> Option<RtoConfig> {
+fn read_config(path: &PathBuf) -> Option<RtoConfig> {
 	let ext = path.extension();
 	if ext == None || ext.unwrap() != "toml" {
-		//println!("not end with .toml: {}", path.display());
 		return None;
 	}
 
@@ -144,7 +176,7 @@ fn read_config(path: PathBuf) -> Option<RtoConfig> {
 }
 
 fn process_config(path: PathBuf) -> Option<RtoConfig> {
-	let conf_e = read_config(path);
+	let conf_e = read_config(&path);
 	let mut conf = match conf_e {
 		Some(conf) => conf,
 		None => return None,
@@ -155,7 +187,12 @@ fn process_config(path: PathBuf) -> Option<RtoConfig> {
 		return None;
 	}
 
-	let ret = set_app_aot_flag(&conf.elf_path);
+	let ret = db_add_link(&path.file_name().unwrap().to_string_lossy().into_owned());
+	if ret != 0 {
+		return None;
+	}
+
+	let ret = set_app_aot_flag(&conf.elf_path, true);
 	if ret != 0 {
 		return None;
 	}
@@ -174,7 +211,7 @@ fn refresh_all_config(rto_configs: &mut Vec<RtoConfig>) {
 	let dir_e = fs::read_dir(&Path::new("/etc/sysboost.d"));
 	let dir = match dir_e {
 		Ok(dir) => dir,
-		Err(_) => return
+		Err(e) => { log::error!("{}", e); return; }
 	};
 
 	let mut i = 0;
@@ -189,7 +226,7 @@ fn refresh_all_config(rto_configs: &mut Vec<RtoConfig>) {
 		}
 
 		if i == MAX_BOOST_PROGRAM {
-			println!("too many boost program");
+			log::error!("too many boost program");
 			break;
 		}
 		let ret = process_config(path);
@@ -198,6 +235,33 @@ fn refresh_all_config(rto_configs: &mut Vec<RtoConfig>) {
 			None => {},
 		}
 		i += 1;
+	}
+}
+
+fn clean_last_rto() {
+	// all link, need unset flag
+	let dir_e = fs::read_dir(&Path::new(SYSBOOST_DB_PATH));
+	let dir = match dir_e {
+		Ok(dir) => dir,
+		Err(e) => { log::error!("{}", e); return; }
+	};
+
+	for entry in dir {
+		let entry = entry.ok().unwrap();
+		let path = entry.path();
+		if path.is_dir() {
+			continue;
+		}
+		if path.file_name() == None {
+			continue;
+		}
+		if is_symlink(&path) == false {
+			continue;
+		}
+		let file_name = path.file_name().unwrap();
+		let p = format!("{}{}", SYSBOOST_DB_PATH, file_name.to_string_lossy());
+		set_app_aot_flag(&p, false);
+		db_remove_link(&p);
 	}
 }
 
@@ -225,7 +289,7 @@ fn check_elf_files_modify(inotify: &mut Inotify) -> bool {
 
         for event in events {
 		if event.mask.contains(EventMask::MODIFY) {
-			println!("File modified: {:?}", event);
+			log::info!("File modified: {:?}", event);
 			// The name field is present only when watch dir
 			// https://man7.org/linux/man-pages/man7/inotify.7.html
 			return true;
@@ -235,6 +299,8 @@ fn check_elf_files_modify(inotify: &mut Inotify) -> bool {
 }
 
 fn start_service() {
+	clean_last_rto();
+
 	let mut rto_configs: Vec<RtoConfig> = Vec::new();
 	refresh_all_config(&mut rto_configs);
 	let mut elf_inotify = watch_old_elf_files(&rto_configs);
@@ -255,7 +321,6 @@ fn start_service() {
 }
 
 pub fn daemon_loop() {
-	println!("daemon_loop");
 	loop {
 		start_service();
 	}
@@ -296,8 +361,8 @@ mod tests {
 
 		// watch link file
 		let file_path = Path::new("xxx.link");
-		//let canonical_path = fs::canonicalize(file_path).expect("fail");
-		//println!("{} -- {}", file_path.display(), canonical_path.to_str().unwrap());
+		// let canonical_path = fs::canonicalize(file_path).expect("fail");
+		// println!("{} -- {}", file_path.display(), canonical_path.to_str().unwrap());
 		elf_inotify.add_watch(file_path, WatchMask::MODIFY).expect("Failed to add watch.");
 
 		// modity it, touch can not trigger evnet
@@ -309,4 +374,12 @@ mod tests {
 		let is_elf_modify = check_elf_files_modify(&mut elf_inotify);
 		assert_eq!(is_elf_modify, true);
 	}
+	#[test]
+    fn test_run_child() {
+        let cmd = "ls";
+        let args = vec!["-l".to_owned(), ".".to_owned()];
+        let exit_code = run_child(cmd, &args);
+
+        assert_eq!(exit_code, 0);
+    }
 }

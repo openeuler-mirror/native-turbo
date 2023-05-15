@@ -1,4 +1,4 @@
 *.lock
 *.log
 /target
-
+*.link
