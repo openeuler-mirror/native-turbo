@@ -17,8 +17,6 @@ typedef struct {
 	Elf64_Shdr *dynsym_sec;
 	Elf64_Shdr *dynstr_sec;
 
-	Elf64_Shdr *rel;
-
 	Elf64_Phdr *hdr_Phdr;
 	Elf64_Phdr *text_Phdr;
 	Elf64_Phdr *rodata_Phdr;
@@ -33,6 +31,7 @@ typedef struct {
 	char *dynstr_data;
 
 	int fd;
+	unsigned long length;
 	char *file_name;
 	char *build_id;
 } elf_file_t;

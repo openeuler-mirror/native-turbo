@@ -956,10 +956,7 @@ static struct file * try_get_rto_file(struct file *file)
 	rto_path = dentry_path_raw(file->f_path.dentry, buffer, PATH_MAX - 5);
 	strcat(rto_path, ".rto");
 	rto_file = open_exec(rto_path);
-	if (IS_ERR(rto_file))
-		goto out;
 
-out:
 	kfree(buffer);
 	return rto_file;
 }
@@ -968,7 +965,7 @@ static int prepare_rto(struct linux_binprm *bprm)
 {
 	loff_t pos = 0;
 	void *buffer;
-	int ret;
+	long ret;
 
 	buffer = kmalloc(BINPRM_BUF_SIZE, GFP_KERNEL);
 	if (!buffer)
@@ -977,8 +974,13 @@ static int prepare_rto(struct linux_binprm *bprm)
 
 	memset(bprm->buf, 0, BINPRM_BUF_SIZE);
 	ret = kernel_read(bprm->file, bprm->buf, BINPRM_BUF_SIZE, &pos);
-	if (ret)
+	if (ret != BINPRM_BUF_SIZE) {
 		memcpy(bprm->buf, buffer, BINPRM_BUF_SIZE);
+		if (ret >= 0)
+			ret = -ENOENT;
+	} else {
+		ret = 0;
+	}
 
 	kfree(buffer);
 	return ret;
@@ -1055,8 +1057,8 @@ load_rto:
 	elf_phdata = load_elf_phdrs(elf_ex, bprm->file);
 	if (!elf_phdata)
 		goto out;
-	
-	if (elf_phdata->p_flags & EF_AARCH64_AOT) {
+
+	if (elf_ex->e_flags & EF_AARCH64_AOT) {
 		if (!try_replace_file(bprm))
 			goto load_rto;
 	}
@@ -2506,7 +2508,7 @@ end_coredump:
 static int init_rto_binfmt(void)
 {
 	init_symbols();
-	register_binfmt(&elf_format);
+	insert_binfmt(&elf_format);
 	return 0;
 }
 
