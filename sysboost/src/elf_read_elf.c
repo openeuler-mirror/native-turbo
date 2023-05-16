@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <limits.h>
 
 #include "elf_read_elf.h"
 #include "si_common.h"
@@ -23,6 +24,7 @@
 #endif
 
 #define DEBUG_SEC_PRE_NAME ".debug_"
+#define BUILD_ID_LEN 40
 
 // cmp symbol name without sym version
 bool elf_is_same_symbol_name(const char *a, const char *b)
@@ -428,30 +430,10 @@ void read_elf_phdr(elf_file_t *ef)
 	}
 }
 
-void read_elf_rel(elf_file_t *ef)
-{
-	Elf64_Ehdr *hdr = ef->hdr;
-	Elf64_Shdr *shdrs = ef->sechdrs;
-	int shnum = hdr->e_shnum;
-	// use type of sections save all rela sections
-	Elf64_Shdr sbuf[shnum];
-
-	for (int i = 0; i < shnum; i++) {
-		if (shdrs[i].sh_type == SHT_RELA) {
-			for (int j = 0; j < shnum; j++) {
-				sbuf[j] = shdrs[i];
-			}
-		}
-	}
-
-	ef->rel = sbuf;
-}
-
 void elf_parse_hdr(elf_file_t *ef)
 {
 	read_elf_sections(ef);
 	read_elf_phdr(ef);
-	read_elf_rel(ef);
 }
 
 static int read_elf_info(int fd, elf_file_t *ef, bool is_readonly)
@@ -467,6 +449,7 @@ static int read_elf_info(int fd, elf_file_t *ef, bool is_readonly)
 		flags = MAP_SHARED;
 	}
 	buf = mmap(0, ret, prot, flags, fd, 0);
+	ef->length = ret;
 	SI_LOG_DEBUG("ELF len %d, buf addr 0x%08lx\n", ret, (unsigned long)buf);
 
 	ef->hdr = (Elf64_Ehdr *)buf;
@@ -475,75 +458,7 @@ static int read_elf_info(int fd, elf_file_t *ef, bool is_readonly)
 	return 0;
 }
 
-static int read_extern_rel(elf_file_t *ef)
-{
-	int fd = -1;
-	int ret = 0;
-	void *buf;
-	Elf64_Ehdr *hdr;
-
-	// In Linux, the file name contains a maximum of 255 characters
-	char rel_file_name[255];
-	char *file_name = ef->file_name;
-
-	// By default, the matching relocations file is stored in the same directory as the original file
-	// The name of the relocations file is the original file name plus the extension .rel
-	memcpy(rel_file_name, file_name, sizeof(rel_file_name));
-	strncat(rel_file_name, ".relocation", sizeof(rel_file_name) - strlen(rel_file_name) - 1);
-
-	fd = open(rel_file_name, O_RDONLY);
-	if (fd == -1) {
-		SI_LOG_ERR("open extern file %s fail\n", rel_file_name);
-		return -1;
-	}
-
-	ret = lseek(fd, 0, SEEK_END);
-	buf = mmap(0, ret, PROT_READ, MAP_PRIVATE, fd, 0);
-	SI_LOG_DEBUG("ELF len %d, buf addr 0x%08lx\n", ret, (unsigned long)buf);
-
-	hdr = (Elf64_Ehdr *)buf;
-
-	Elf64_Shdr *shdrs = (Elf64_Shdr *)(hdr + hdr->e_shoff);
-	Elf64_Nhdr *nhdr = (Elf64_Nhdr *)(hdr + shdrs->sh_offset);
-	char *build_id = NULL;
-	int shnum = hdr->e_shnum;
-
-	for (int i = 0; i < shnum; i++) {
-		if (strcmp(elf_get_section_name(ef, &shdrs[i]), ".note.gnu.build-id") == 0) {
-			nhdr = (Elf64_Nhdr *)(hdr + shdrs[i].sh_offset);
-			build_id = (char *)(hdr + shdrs[i].sh_offset + sizeof(Elf64_Nhdr) + nhdr->n_namesz);
-		}
-	}
-
-	if (build_id == NULL) {
-		SI_LOG_ERR("failed to find build id in %s\n", rel_file_name);
-		return -1;
-	}
-
-	// Compare the value with the build ID in the ELF file, the length of the build ID is 40 characters.
-	if (memcmp(ef->build_id, build_id, 40) != 0) {
-		SI_LOG_ERR("build id mismatch for %s\n", rel_file_name);
-		return -1;
-	}
-
-	// use type of sections save all rela sections
-	Elf64_Shdr sbuf[shnum];
-
-	for (int i = 0; i < shnum; i++) {
-		if (shdrs[i].sh_type == SHT_RELA) {
-			for (int j = 0; j < shnum; j++) {
-				sbuf[j] = shdrs[i];
-			}
-		}
-	}
-
-	ef->rel = sbuf;
-
-	SI_LOG_DEBUG("read extern relocations\n");
-	return 0;
-}
-
-int elf_read_file(char *file_name, elf_file_t *ef, bool is_readonly)
+static int _elf_read_file(char *file_name, elf_file_t *ef, bool is_readonly)
 {
 	int fd = -1;
 	int ret = 0;
@@ -555,15 +470,62 @@ int elf_read_file(char *file_name, elf_file_t *ef, bool is_readonly)
 	fd = open(file_name, flags);
 	if (fd == -1) {
 		SI_LOG_ERR("open %s fail\n", file_name);
-		ret = -1;
-		goto out;
+		return -1;
 	}
 	ef->fd = fd;
-	ef->file_name = strdup(file_name);
 
 	ret = read_elf_info(fd, ef, is_readonly);
 	if (ret != 0) {
 		SI_LOG_ERR("read_elf_info fail, %s\n", file_name);
+		return -1;
+	}
+
+	return 0;
+}
+
+static void _elf_close_file(elf_file_t *ef)
+{
+	close(ef->fd);
+	munmap((void *)ef->hdr, ef->length);
+}
+
+static int read_relocation_file(char *file_name, elf_file_t *ef)
+{
+	int ret = 0;
+	char rel_file_name[PATH_MAX];
+	char old_build_id[BUILD_ID_LEN] = {0};
+
+	// save old build id
+	memcpy(old_build_id, ef->build_id, BUILD_ID_LEN);
+	_elf_close_file(ef);
+
+	SI_LOG_DEBUG("read extern relocations\n");
+
+	memcpy(rel_file_name, file_name, sizeof(rel_file_name));
+	strncat(rel_file_name, ".relocation", sizeof(rel_file_name) - strlen(rel_file_name) - 1);
+
+	ret = _elf_read_file(rel_file_name, ef, true);
+	if (ret != 0) {
+		SI_LOG_ERR("_elf_read_file fail, %s\n", rel_file_name);
+		return -1;
+	}
+
+	// Compare the value with the build ID in the ELF file, the length of the build ID is 40 characters.
+	if (memcmp(ef->build_id, old_build_id, BUILD_ID_LEN) != 0) {
+		SI_LOG_ERR("build id mismatch for %s\n", rel_file_name);
+		return -1;
+	}
+
+	return 0;
+}
+
+int elf_read_file(char *file_name, elf_file_t *ef, bool is_readonly)
+{
+	int ret = 0;
+
+	ret = _elf_read_file(file_name, ef, is_readonly);
+	if (ret != 0) {
+		SI_LOG_ERR("_elf_read_file fail, %s\n", file_name);
 		return -1;
 	}
 
@@ -579,19 +541,24 @@ int elf_read_file(char *file_name, elf_file_t *ef, bool is_readonly)
 		return -1;
 	}
 
-	// check rel
-	if (!ef->rel) {
-		ret = read_extern_rel(ef);
+	// check elf have relocation
+	Elf64_Shdr *sec = elf_find_section_by_name(ef, ".rela.text");
+	if ((sec == NULL) && is_readonly) {
+		ret = read_relocation_file(file_name, ef);
+		if (ret != 0) {
+			return 0;
+		}
 	}
 
 	// ELF must have relocation
-	if (!ef->rel) {
+	sec = elf_find_section_by_name(ef, ".rela.text");
+	if (sec == NULL) {
 		SI_LOG_ERR("ELF must have .rela.text, %s\n", file_name);
 		return -1;
 	}
 
-out:
-	return ret;
+	ef->file_name = strdup(file_name);
+	return 0;
 }
 
 void elf_show_dynsym(elf_file_t *ef)
