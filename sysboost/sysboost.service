@@ -4,7 +4,7 @@ Requires=sysboost.service
 After=sysboost.service
 
 [Service]
-Type=oneshot
+Type=simple
 ExecStart=/usr/bin/sysboostd
 
 [Install]

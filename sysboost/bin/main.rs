@@ -13,6 +13,7 @@ mod daemon;
 
 use crate::daemon::daemon_loop;
 
+use daemonize::Daemonize;
 use std::env;
 use basic::logger::{self};
 use log::{self};
@@ -32,6 +33,15 @@ fn main() {
 
 		if args[cur_arg] == "-debug" {
 			logger::init_log_to_console(APP_NAME, log::LevelFilter::Debug);
+		} else if args[cur_arg] == "-daemon" {
+			let daemonize = Daemonize::new();
+			match daemonize.start() {
+				Ok(_) => log::info!("Sysboost Start On Daemon"),
+				Err(e) => {
+					log::error!("Error, {}", e);
+					return;
+				}
+			}
 		}
 	}
 
