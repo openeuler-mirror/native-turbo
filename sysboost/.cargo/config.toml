@@ -2,14 +2,11 @@
 registry = "https://github.com/rust-lang/crates.io-index"
 
 # 指定镜像
-replace-with = 'mirror'
+replace-with = 'ustc'
 
 # 本地vendor
 [source.local]
 directory = "vendor"
-
-[source.mirror]
-registry = "http://mirrors.tools.huawei.com/rust/crates.io-index/"
 
 # 中国科学技术大学
 [source.ustc]
