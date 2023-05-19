@@ -3,7 +3,7 @@ ROOT_DIR=../../../
 BUILD_DIR=$(ROOT_DIR)build/
 TEMPLATE_FILE=$(BUILD_DIR)sysboost/src/static_template/sysboost_static_template
 SYSBOOST=$(BUILD_DIR)sysboost/sysboost
-TEST_APP=$(BUILD_DIR)sysboost/test/test_simple/simple_app
+TEST_APP=$(BUILD_DIR)sysboost/tests/test_simple/simple_app
 LIBC=/usr/lib64/libc.so.6
 LIBLD=/lib/ld-linux-aarch64.so.1
 

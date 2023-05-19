@@ -1,10 +1,10 @@
-KERNELDIR := /root/kernel
+KDIR ?= /lib/modules/$(shell uname -r)/build
 
 obj-m := binfmt_rto.o
 PWD := $(shell pwd)
 
 modules:
-	$(MAKE) -C $(KERNELDIR) M=$(PWD) modules
+	$(MAKE) -C $(KDIR) M=$(PWD) modules
 
 .PHONEY: clean
 

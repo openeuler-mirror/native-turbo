@@ -2,7 +2,7 @@
 
 sysboosts = [
         'src',
-        'test'
+        'tests'
 ]
 
 default_cflags = machine_args
@@ -55,7 +55,7 @@ foreach src:sysboosts
     	cflags += ['-O2']
     endif
 
-    if src == 'test'
+    if src == 'tests'
         foreach tt:tests
             path = join_paths(src, tt)
             subdir(path)

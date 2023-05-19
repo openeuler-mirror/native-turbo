@@ -1,5 +1,10 @@
 .PHONY: all clean test
 
+SYSBOOSTD=./target/debug/sysboostd
+SYSBOOST=../build/sysboost/sysboost
+SYSBOOSTD_INSTALL_PATH=/usr/bin/sysboostd
+SYSBOOST_INSTALL_PATH=/usr/bin/sysboost
+
 all: sysboostd
 
 sysboostd:
@@ -9,7 +14,13 @@ sysboostd:
 clean:
 	cargo clean
 
-test:
+test: sysboostd
+	cp -f $(SYSBOOSTD) $(SYSBOOSTD_INSTALL_PATH)
+	cp -f $(SYSBOOST) $(SYSBOOST_INSTALL_PATH)
+	clear
+	cargo test
+
+test-debug:
 	cargo test -- --nocapture
 
 format:

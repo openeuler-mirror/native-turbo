@@ -489,6 +489,8 @@ static void _elf_close_file(elf_file_t *ef)
 	munmap((void *)ef->hdr, ef->length);
 }
 
+// If the rela section is not found, check if there is a relocation file in the same
+// directory and replace the original file with that relocation file
 static int read_relocation_file(char *file_name, elf_file_t *ef)
 {
 	int ret = 0;
@@ -504,6 +506,7 @@ static int read_relocation_file(char *file_name, elf_file_t *ef)
 	memcpy(rel_file_name, file_name, sizeof(rel_file_name));
 	strncat(rel_file_name, ".relocation", sizeof(rel_file_name) - strlen(rel_file_name) - 1);
 
+	(void *)memset(ef, 0, sizeof(elf_file_t));
 	ret = _elf_read_file(rel_file_name, ef, true);
 	if (ret != 0) {
 		SI_LOG_ERR("_elf_read_file fail, %s\n", rel_file_name);
