@@ -49,6 +49,10 @@
 #include <asm/param.h>
 #include <asm/page.h>
 
+static bool use_rto = false;
+module_param(use_rto, bool, 0600);
+MODULE_PARM_DESC(use_rto, "if use rto featue");
+
 #ifndef EF_AARCH64_AOT
 #define EF_AARCH64_AOT      (0x00010000U)
 #endif
@@ -1041,6 +1045,11 @@ static int load_elf_binary(struct linux_binprm *bprm)
 
 load_rto:
 	retval = -ENOEXEC;
+	/* close feature to rmmod this ko */
+	if (!use_rto) {
+		goto out;
+	}
+
 	/* First of all, some simple consistency checks */
 	if (memcmp(elf_ex->e_ident, ELFMAG, SELFMAG) != 0)
 		goto out;

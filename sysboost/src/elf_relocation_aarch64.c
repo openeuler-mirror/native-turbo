@@ -1043,6 +1043,7 @@ void correct_stop_libc_atexit(elf_link_t *elf_link)
 		si_panic("didn't find corresponding rela entry in .rela.dyn\n");
 }
 
+/*
 void replace_symbol(elf_link_t *elf_link, char *old_sym_name, char *new_sym_name)
 {
 	unsigned long target_addr = find_sym_new_addr(elf_link, get_main_ef(elf_link), new_sym_name);
@@ -1063,6 +1064,7 @@ void replace_symbol(elf_link_t *elf_link, char *old_sym_name, char *new_sym_name
 		elf_write_u32(out_ef, cur_offset, new_binary);
 	}
 }
+*/
 
 void replace_malloc(elf_link_t *elf_link)
 {
@@ -1070,6 +1072,6 @@ void replace_malloc(elf_link_t *elf_link)
 		return;
 	}
 
-	replace_symbol(elf_link, "__malloc", "malloc");
-	replace_symbol(elf_link, "__free", "free");
+	//replace_symbol(elf_link, "__malloc", "malloc");
+	//replace_symbol(elf_link, "__free", "free");
 }

@@ -13,34 +13,43 @@ mod daemon;
 
 use crate::daemon::daemon_loop;
 
-use daemonize::Daemonize;
-use std::env;
 use basic::logger::{self};
+use daemonize::Daemonize;
 use log::{self};
+use std::env;
 
 const APP_NAME: &str = "sysboostd";
 
 fn main() {
 	let args: Vec<String> = env::args().collect();
 	let argc = args.len();
-
-	logger::init_log(APP_NAME, log::LevelFilter::Info, "syslog", None);
-	log::info!("{} running", APP_NAME);
+	let mut mode = "default";
 
 	if argc != 1 {
 		// arg0 is program name, parameter is from arg1
 		let cur_arg = 1;
 
 		if args[cur_arg] == "-debug" {
-			logger::init_log_to_console(APP_NAME, log::LevelFilter::Debug);
+			mode = "debug";
 		} else if args[cur_arg] == "-daemon" {
-			let daemonize = Daemonize::new();
-			match daemonize.start() {
-				Ok(_) => log::info!("Sysboost Start On Daemon"),
-				Err(e) => {
-					log::error!("Error, {}", e);
-					return;
-				}
+			mode = "daemon";
+		}
+	}
+
+	if mode == "debug" {
+		logger::init_log_to_console(APP_NAME, log::LevelFilter::Debug);
+	} else {
+		logger::init_log(APP_NAME, log::LevelFilter::Info, "syslog", None);
+	}
+	log::info!("{} running", APP_NAME);
+
+	if mode == "daemon" {
+		let daemonize = Daemonize::new();
+		match daemonize.start() {
+			Ok(_) => log::info!("Sysboost Start On Daemon"),
+			Err(e) => {
+				log::error!("Error, {}", e);
+				return;
 			}
 		}
 	}

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MulanPSL-2.0 */
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -73,7 +74,7 @@ void elf_link_set_mode(elf_link_t *elf_link, unsigned int mode)
 
 static int elf_link_prepare(elf_link_t *elf_link)
 {
-	char name[128] = {0};
+	char name[PATH_MAX] = {0};
 
 	if (elf_link->out_ef.fd != -1) {
 		return 0;
@@ -81,7 +82,7 @@ static int elf_link_prepare(elf_link_t *elf_link)
 
 	// out file name is app.rto (RunTime Optimization)
 	elf_file_t *main_ef = get_main_ef(elf_link);
-	(void)snprintf(name, sizeof(name) - 1, "%s.rto", si_basename(main_ef->file_name));
+	(void)snprintf(name, sizeof(name) - 1, "%s.rto", main_ef->file_name);
 	return create_elf_file(name, &elf_link->out_ef);
 }
 
