@@ -4,7 +4,7 @@ Requires=sysboost.service
 After=sysboost.service
 
 [Service]
-Type=simple
+Type=forking
 ExecStart=/usr/bin/sysboostd daemon
 
 [Install]
