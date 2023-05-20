@@ -46,7 +46,7 @@ fn main() {
 	if mode == "daemon" {
 		let daemonize = Daemonize::new();
 		match daemonize.start() {
-			Ok(_) => log::info!("Sysboost Start On Daemon"),
+			Ok(_) => log::info!("On Daemon"),
 			Err(e) => {
 				log::error!("Error, {}", e);
 				return;

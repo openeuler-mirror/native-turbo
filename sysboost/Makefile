@@ -15,9 +15,9 @@ clean:
 	cargo clean
 
 test: sysboostd
+	clear
 	cp -f $(SYSBOOSTD) $(SYSBOOSTD_INSTALL_PATH)
 	cp -f $(SYSBOOST) $(SYSBOOST_INSTALL_PATH)
-	clear
 	cargo test
 
 test-debug:
