@@ -8,6 +8,9 @@ replace-with = 'ustc'
 [source.local]
 directory = "vendor"
 
+[source.mirror]
+registry = "http://mirrors.tools.huawei.com/rust/crates.io-index/"
+
 # 中国科学技术大学
 [source.ustc]
 registry = "https://mirrors.ustc.edu.cn/crates.io-index"

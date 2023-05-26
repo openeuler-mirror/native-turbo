@@ -3,7 +3,7 @@ ROOT_DIR=../../../
 BUILD_DIR=$(ROOT_DIR)build/
 TEMPLATE_FILE=$(BUILD_DIR)sysboost/src/static_template/sysboost_static_template
 SYSBOOST=$(BUILD_DIR)sysboost/sysboost
-LIBC=libc.so
+LIBC=/usr/lib64/libc.so.6
 LIBTINFO=/usr/lib64/libtinfo.so.7
 BASH=/usr/bin/bash
 

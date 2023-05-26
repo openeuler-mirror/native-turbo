@@ -89,7 +89,7 @@ fn db_remove_link(path: &String) {
 }
 
 fn run_child(cmd: &str, args: &Vec<String>) -> i32 {
-	log::info!("run child, {}, {}", cmd, args.join(" "));
+	log::info!("run child: {}, {}", cmd, args.join(" ").to_string());
 	let mut child = match Command::new(cmd).args(args).stdout(Stdio::piped()).spawn() {
 		Ok(child) => child,
 		Err(e) => {
@@ -108,7 +108,7 @@ fn run_child(cmd: &str, args: &Vec<String>) -> i32 {
 
 	for line in reader.lines() {
 		let line = line.unwrap_or_else(|_| "<read error>".to_owned());
-		log::info!("{}: {}", cmd, line);
+		log::info!("output: {}", line);
 	}
 
 	let status = match child.wait() {
@@ -413,6 +413,7 @@ pub fn daemon_loop() {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use basic::logger::{self};
 
 	#[test]
 	fn test_check_elf_files_modify_1() {
@@ -458,8 +459,11 @@ mod tests {
 		let is_elf_modify = check_elf_files_modify(&mut elf_inotify);
 		assert_eq!(is_elf_modify, true);
 	}
+
 	#[test]
 	fn test_run_child() {
+		logger::init_log("APP_NAME", log::LevelFilter::Info, "syslog", None);
+
 		let cmd = "ls";
 		let args = vec!["-l".to_owned(), ".".to_owned()];
 		let exit_code = run_child(cmd, &args);

@@ -341,7 +341,7 @@ void read_elf_sections(elf_file_t *ef)
 	Elf64_Ehdr *hdr = ef->hdr;
 	Elf64_Shdr *sechdrs = NULL;
 	Elf64_Shdr *strhdr;
-	Elf64_Nhdr *nhdr = (Elf64_Nhdr *)(hdr + sechdrs->sh_offset);
+	Elf64_Nhdr *nhdr = NULL;
 
 	// sechdrs addr caller set when tmp writer
 	if (ef->sechdrs == NULL) {
@@ -374,7 +374,7 @@ void read_elf_sections(elf_file_t *ef)
 			ef->dynstr_data = (char *)hdr + sechdrs[index_str].sh_offset;
 		} else if (strcmp(elf_get_section_name(ef, &sechdrs[i]), ".note.gnu.build-id") == 0) {
 			nhdr = (Elf64_Nhdr *)(hdr + sechdrs[i].sh_offset);
-			ef->build_id = (char *)(hdr + sechdrs[i].sh_offset + sizeof(Elf64_Nhdr) + nhdr->n_namesz);
+			ef->build_id = (char *)((void*)hdr + sechdrs[i].sh_offset + sizeof(Elf64_Nhdr) + nhdr->n_namesz);
 		}
 	}
 }
@@ -503,8 +503,12 @@ static int read_relocation_file(char *file_name, elf_file_t *ef)
 
 	SI_LOG_DEBUG("read extern relocations\n");
 
-	memcpy(rel_file_name, file_name, sizeof(rel_file_name));
-	strncat(rel_file_name, ".relocation", sizeof(rel_file_name) - strlen(rel_file_name) - 1);
+	// path like /usr/lib/relocation/usr/lib64/libtinfo.so.7.relocation
+	ret = snprintf(rel_file_name, sizeof(rel_file_name) - 1, "/usr/lib/relocation%s.relocation", file_name);
+	if (ret < 0) {
+		SI_LOG_ERR("snprintf fail, %s\n", file_name);
+		return -1;
+	}
 
 	(void *)memset(ef, 0, sizeof(elf_file_t));
 	ret = _elf_read_file(rel_file_name, ef, true);
