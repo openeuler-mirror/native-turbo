@@ -5,7 +5,7 @@ After=sysboost.service
 
 [Service]
 Type=forking
-ExecStart=/usr/bin/sysboostd daemon
+ExecStart=/usr/bin/sysboostd -daemon
 
 [Install]
 WantedBy=multi-user.target

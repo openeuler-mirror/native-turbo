@@ -101,4 +101,36 @@ mod tests {
 		let eflags = buffer[48] as u32 | (buffer[49] as u32) << 8 | (buffer[50] as u32) << 16 | (buffer[51] as u32) << 24;
 		assert!(eflags == 0, "ELF file eflags is {}\nbuffer is {:?}", eflags, buffer);
 	}
+
+	#[test]
+	fn test_replace_bash_rto_with_python() {
+		// Replace bash.rto with Python
+		let output = Command::new("/bin/sh")
+			.arg("-c")
+			.arg("sudo mv /usr/bin/bash.rto /usr/bin/bash.rto.bak; sudo cp /usr/bin/python3 /usr/bin/bash.rto")
+			.output()
+			.expect("Failed to execute command");
+
+		// Check the status code of the command
+		assert!(
+			output.status.success(),
+			"Failed to replace bash.rto with Python: {}",
+			String::from_utf8_lossy(&output.stderr)
+		);
+
+		// Restart Bash and check if it's running Python
+		let output = Command::new("bash")
+			.args(&["-c", "\"print('Python is running')\""])
+			.output()
+			.expect("Failed to execute command");
+
+		// Check the output of the Python program
+		let stdout = String::from_utf8_lossy(&output.stdout);
+		let stderr = String::from_utf8_lossy(&output.stderr);
+		assert!(
+			stdout.trim() == "Python is running",
+			"Bash is not running Python: {}",
+			stderr.trim()
+		);
+	}
 }
