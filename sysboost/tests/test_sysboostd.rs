@@ -49,6 +49,16 @@ mod tests {
 
 	#[test]
 	fn test_bash_rto_can_running() {
+		// Remove old bash.rto file if it exists
+		let bash_rto_path = "/usr/bin/bash.rto";
+		if std::path::Path::new(bash_rto_path).exists() {
+			match std::fs::remove_file(bash_rto_path) {
+				Ok(_) => {},
+				Err(e) => {
+					panic!("Failed to remove old bash.rto file: {}", e);
+				}
+			};
+		}
 		// Create config file
 		let config_file_path = "/etc/sysboost.d/bash.toml";
 		let mut config_file = match File::create(config_file_path) {
