@@ -4,8 +4,8 @@ Requires=sysboost.service
 After=sysboost.service
 
 [Service]
-Type=simple
-ExecStart=/usr/bin/sysboostd daemon
+Type=forking
+ExecStart=/usr/bin/sysboostd -daemon
 
 [Install]
 WantedBy=multi-user.target
