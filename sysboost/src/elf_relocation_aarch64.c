@@ -1042,36 +1042,3 @@ void correct_stop_libc_atexit(elf_link_t *elf_link)
 	if (!found)
 		si_panic("didn't find corresponding rela entry in .rela.dyn\n");
 }
-
-/*
-void replace_symbol(elf_link_t *elf_link, char *old_sym_name, char *new_sym_name)
-{
-	unsigned long target_addr = find_sym_new_addr(elf_link, get_main_ef(elf_link), new_sym_name);
-	unsigned long origin_addr =
-		find_sym_new_addr(elf_link, get_template_ef(elf_link), old_sym_name);
-
-	elf_file_t *out_ef = get_out_ef(elf_link);
-	Elf64_Shdr *sec_text = elf_find_section_by_name(out_ef, ".text");
-	Elf64_Off text_offset = sec_text->sh_offset;
-	Elf64_Off text_end = text_offset + sec_text->sh_size;
-
-	for (Elf64_Off cur_offset = text_offset; cur_offset < text_end; cur_offset += ARM64_INSN_LEN) {
-		unsigned binary = elf_read_u32(out_ef, cur_offset);
-		unsigned long cur_addr = get_branch_addr(binary, cur_offset);
-		if (cur_addr != origin_addr)
-			continue;
-		unsigned new_binary = gen_branch_binary(binary, target_addr, cur_offset);
-		elf_write_u32(out_ef, cur_offset, new_binary);
-	}
-}
-*/
-
-void replace_malloc(elf_link_t *elf_link)
-{
-	if (strcmp("bash.rto", si_basename(elf_link->out_ef.file_name)) != 0) {
-		return;
-	}
-
-	//replace_symbol(elf_link, "__malloc", "malloc");
-	//replace_symbol(elf_link, "__free", "free");
-}

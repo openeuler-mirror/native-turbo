@@ -9,6 +9,7 @@
 #include "elf_read_elf.h"
 #include "si_array.h"
 #include "si_common.h"
+#include "si_debug.h"
 
 #define ELF_SEGMENT_ALIGN (0x200000)
 
@@ -23,10 +24,17 @@
 
 #define LIBHOOK "libhook.so"
 
+enum RtoMode {
+	ELF_LINK_SHARE = 0,
+	ELF_LINK_STATIC,
+	ELF_LINK_STATIC_NOLIBC,
+};
+
 typedef struct {
 	elf_file_t in_efs[MAX_ELF_FILE];
 	elf_file_t out_ef;
 	unsigned int in_ef_nr;
+	unsigned int link_mode;
 
 	elf_file_t vdso_ef;
 	elf_file_t *hook_func_ef;
@@ -80,14 +88,14 @@ static inline bool is_static_mode(elf_link_t *elf_link)
 	return !elf_link->dynamic_link;
 }
 
-static inline bool is_nolibc_mode(elf_link_t *elf_link)
+static inline bool is_static_nolibc_mode(elf_link_t *elf_link)
 {
 #ifndef __aarch64__
-	if (!elf_link->libc_ef)
+	if (elf_link->link_mode == ELF_LINK_STATIC_NOLIBC)
 		si_panic("nolibc_mode not support x86\n");
 #endif
 
-	return !elf_link->libc_ef;
+	return elf_link->link_mode == ELF_LINK_STATIC_NOLIBC;
 }
 
 static inline bool is_hook_func(elf_link_t *elf_link)
