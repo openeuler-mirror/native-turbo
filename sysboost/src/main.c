@@ -67,6 +67,10 @@ int main(int argc, char *argv[])
 		elf_link_set_mode(elf_link, ELF_LINK_STATIC);
 		cur_arg++;
 		SI_LOG_INFO("static mode\n");
+	} else if (strcmp(argv[cur_arg], "-static-nolibc") == 0) {
+		elf_link_set_mode(elf_link, ELF_LINK_STATIC_NOLIBC);
+		cur_arg++;
+		SI_LOG_INFO("static-nolibc mode\n");
 	}
 
 	for (int i = cur_arg; i < argc; i++) {
