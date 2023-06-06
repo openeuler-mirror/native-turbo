@@ -66,7 +66,7 @@ foreach src:sysboosts
         executable('sysboost', sources,
                 install: true,
                 c_args: cflags,
-                link_args: ldflags,
+                link_args: ldflags + ['-Wl,--whole-archive', '/usr/lib64/liblzma.a', '-Wl,--no-whole-archive'],
                 link_whole: link_libs,
                 dependencies: ext_deps + dep_objs,
                 include_directories: includes)
