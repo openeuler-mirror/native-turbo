@@ -77,7 +77,7 @@ void elf_link_set_mode(elf_link_t *elf_link, unsigned int mode)
 
 	// static mode use template
 	if (mode == ELF_LINK_STATIC_NOLIBC) {
-		elf_link_add_infile(elf_link, "/usr/bin/sysboost_static_template");
+		elf_link_add_infile(elf_link, RELOCATION_ROOT_DIR "/sysboost_static_template.relocation");
 	} else {
 		elf_link_add_infile(elf_link, LD_SO_STATIC_TEMPLATE);
 	}

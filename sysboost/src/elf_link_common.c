@@ -510,6 +510,7 @@ static char *get_ifunc_nice_name(char *sym_name)
 		return sym_name;
 
 	// ignore prefix of __memchr __strlen __GI_strlen __GI___strnlen __libc_memmove
+	// direct cmp char for performace, compile will optimize branch
 	if ((sym_name[0] == '_') && (sym_name[1] == '_') && (sym_name[2] == 'G') && (sym_name[3] == 'I') && (sym_name[4] == '_') && (sym_name[5] == '_') && (sym_name[6] == '_')) {
 		return sym_name + 7;
 	}

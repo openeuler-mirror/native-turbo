@@ -373,7 +373,7 @@ void read_elf_sections(elf_file_t *ef)
 			ef->dynstr_sec = &sechdrs[index_str];
 			ef->dynstr_data = (char *)hdr + sechdrs[index_str].sh_offset;
 		} else if (strcmp(elf_get_section_name(ef, &sechdrs[i]), ".note.gnu.build-id") == 0) {
-			nhdr = (Elf64_Nhdr *)(hdr + sechdrs[i].sh_offset);
+			nhdr = (Elf64_Nhdr *)((void*)hdr + sechdrs[i].sh_offset);
 			ef->build_id = (char *)((void*)hdr + sechdrs[i].sh_offset + sizeof(Elf64_Nhdr) + nhdr->n_namesz);
 		}
 	}
@@ -436,23 +436,50 @@ void elf_parse_hdr(elf_file_t *ef)
 	read_elf_phdr(ef);
 }
 
-static int read_elf_info(int fd, elf_file_t *ef, bool is_readonly)
+static int read_elf_info(elf_file_t *ef, bool is_readonly)
 {
 	int ret;
 	void *buf;
 
-	ret = lseek(fd, 0, SEEK_END);
+	ret = lseek(ef->fd, 0, SEEK_END);
+	if (ret < (int)sizeof(Elf64_Ehdr)) {
+		SI_LOG_ERR("file length is too small\n");
+		return -1;
+	}
+
 	int prot = PROT_READ;
 	int flags = MAP_PRIVATE;
 	if (is_readonly == false) {
 		prot |= PROT_WRITE;
 		flags = MAP_SHARED;
 	}
-	buf = mmap(0, ret, prot, flags, fd, 0);
+	buf = mmap(0, ret, prot, flags, ef->fd, 0);
+	if (buf == MAP_FAILED) {
+		SI_LOG_ERR("mmap fail\n");
+		return -1;
+	}
+	ef->hdr = (Elf64_Ehdr *)buf;
 	ef->length = ret;
 	SI_LOG_DEBUG("ELF len %d, buf addr 0x%08lx\n", ret, (unsigned long)buf);
 
-	ef->hdr = (Elf64_Ehdr *)buf;
+	// check magic
+	if (memcmp(ef->hdr, ELFMAG, SELFMAG) != 0) {
+		if (elf_is_xz_file(ef)) {
+			munmap((void *)ef->hdr, ef->length);
+			lseek(ef->fd, 0, SEEK_SET);
+			ret = elf_load_xz(ef);
+			if (ret != 0) {
+				SI_LOG_ERR("uncompress xz fail\n");
+				return -1;
+			}
+			ef->is_xz_file = true;
+			SI_LOG_DEBUG("file is xz\n");
+		} else {
+			SI_LOG_ERR("file is not ELF\n");
+			return -1;
+		}
+	}
+
 	elf_parse_hdr(ef);
 
 	return 0;
@@ -474,7 +501,7 @@ static int _elf_read_file(char *file_name, elf_file_t *ef, bool is_readonly)
 	}
 	ef->fd = fd;
 
-	ret = read_elf_info(fd, ef, is_readonly);
+	ret = read_elf_info(ef, is_readonly);
 	if (ret != 0) {
 		SI_LOG_ERR("read_elf_info fail, %s\n", file_name);
 		return -1;
@@ -486,7 +513,11 @@ static int _elf_read_file(char *file_name, elf_file_t *ef, bool is_readonly)
 static void _elf_close_file(elf_file_t *ef)
 {
 	close(ef->fd);
-	munmap((void *)ef->hdr, ef->length);
+	if (ef->is_xz_file) {
+		elf_unload_xz(ef);
+	} else {
+		munmap((void *)ef->hdr, ef->length);
+	}
 }
 
 // If the rela section is not found, check if there is a relocation file in the same
@@ -504,7 +535,7 @@ static int read_relocation_file(char *file_name, elf_file_t *ef)
 	SI_LOG_DEBUG("read extern relocations\n");
 
 	// path like /usr/lib/relocation/usr/lib64/libtinfo.so.7.relocation
-	ret = snprintf(rel_file_name, sizeof(rel_file_name) - 1, "/usr/lib/relocation%s.relocation", file_name);
+	ret = snprintf(rel_file_name, sizeof(rel_file_name) - 1, RELOCATION_ROOT_DIR "%s.relocation", file_name);
 	if (ret < 0) {
 		SI_LOG_ERR("snprintf fail, %s\n", file_name);
 		return -1;
@@ -553,7 +584,7 @@ int elf_read_file(char *file_name, elf_file_t *ef, bool is_readonly)
 	if ((sec == NULL) && is_readonly) {
 		ret = read_relocation_file(file_name, ef);
 		if (ret != 0) {
-			return 0;
+			return -1;
 		}
 	}
 

@@ -3,8 +3,12 @@ ROOT_DIR=../../../
 BUILD_DIR=$(ROOT_DIR)build/
 SYSBOOST=$(BUILD_DIR)sysboost/sysboost
 TEST_APP=$(BUILD_DIR)sysboost/tests/test_simple/simple_app
+
+TEMPLATE_FILE=$(BUILD_DIR)sysboost/src/static_template/sysboost_static_template
+TEMPLATE_FILE_PUB_PATH=/usr/lib/relocation/sysboost_static_template.relocation
+
 LIBC=/usr/lib64/libc.so.6
-LIBC_R=/usr/lib/relocation/usr/lib64/libc.so.6.relocation
+LIBC_R=/usr/lib/relocation$(LIBC).relocation
 
 ARCH=$(shell uname -m)
 ifeq ($(ARCH), aarch64)
@@ -24,7 +28,7 @@ simple_app:
 	readelf -W -a $(TEST_APP) > $@.elf
 	objdump -d $(TEST_APP) > $@.asm
 
-# simple test
+# static mode
 simple: simple_app
 	clear
 	@echo ===rto===
@@ -39,6 +43,18 @@ rto:
 
 run:
 	gdb --args $(TEST_APP).rto
+
+# static-nolibc mode
+nolibc: simple_app
+	clear
+	xz $(TEMPLATE_FILE)
+	mv -f $(TEMPLATE_FILE).xz $(TEMPLATE_FILE_PUB_PATH)
+	@echo ===rto===
+	$(SYSBOOST) -static-nolibc $(TEST_APP)
+	readelf -W -a $(TEST_APP).rto > simple_app.rto.elf
+	objdump -d $(TEST_APP).rto > simple_app.rto.asm
+	@echo ===run===
+	$(TEST_APP).rto
 
 aot:
 	make -C $(ROOT_DIR)

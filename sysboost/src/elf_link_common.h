@@ -92,7 +92,7 @@ static inline bool is_static_nolibc_mode(elf_link_t *elf_link)
 {
 #ifndef __aarch64__
 	if (elf_link->link_mode == ELF_LINK_STATIC_NOLIBC)
-		si_panic("nolibc_mode not support x86\n");
+		si_panic("static-nolibc mode not support x86\n");
 #endif
 
 	return elf_link->link_mode == ELF_LINK_STATIC_NOLIBC;

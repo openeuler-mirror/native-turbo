@@ -2,4 +2,4 @@
 set -x
 
 # install tools
-sudo yum install -y gcc cargo
+sudo yum install -y gcc cargo xz-devel
