@@ -693,7 +693,7 @@ static void modify_branch_insn(elf_link_t *elf_link, elf_file_t *ef, Elf64_Rela 
 
 	// Here is an inelegant optimization for bash that cancels all resource release procedures in the
 	// exit process, and directly calls the _Exit function to end the process.
-	if (!elf_link->dynamic_link && unlikely(elf_is_same_symbol_name(name, "exit"))) {
+	if (!is_share_mode(elf_link) && unlikely(elf_is_same_symbol_name(name, "exit"))) {
 		elf_file_t *template_ef = get_template_ef(elf_link);
 		old_sym_addr = find_sym_old_addr(template_ef, "_exit");
 		new_sym_addr = get_new_addr_by_old_addr(elf_link, template_ef, old_sym_addr);
@@ -919,7 +919,7 @@ void modify_rela_plt(elf_link_t *elf_link, si_array_t *arr)
 		int type = ELF64_R_TYPE(src_rela->r_info);
 		int new_index = 0;
 
-		if (elf_link->dynamic_link) {
+		if (is_share_mode(elf_link)) {
 			unsigned old_index = ELF64_R_SYM(src_rela->r_info);
 			new_index = get_new_sym_index(elf_link, obj_rel->src_ef, old_index);
 		}

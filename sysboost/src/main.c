@@ -18,6 +18,7 @@
 
 int main(int argc, char *argv[])
 {
+	int ret = 0;
 	char tmp[PATH_MAX];
 	elf_link_t *elf_link = elf_link_new();
 	int cur_arg;
@@ -62,13 +63,25 @@ int main(int argc, char *argv[])
 		return elf_set_aot(tmp, state);
 	}
 
+	if (strcmp(argv[cur_arg], "--hook") == 0) {
+		elf_link->hook_func = true;
+		cur_arg++;
+		SI_LOG_INFO("hook func\n");
+	}
+
 	// -static parameter is used to determine whether static file generated
 	if (strcmp(argv[cur_arg], "-static") == 0) {
-		elf_link_set_mode(elf_link, ELF_LINK_STATIC);
+		ret = elf_link_set_mode(elf_link, ELF_LINK_STATIC);
+		if (ret < 0) {
+			return -1;
+		}
 		cur_arg++;
 		SI_LOG_INFO("static mode\n");
 	} else if (strcmp(argv[cur_arg], "-static-nolibc") == 0) {
-		elf_link_set_mode(elf_link, ELF_LINK_STATIC_NOLIBC);
+		ret = elf_link_set_mode(elf_link, ELF_LINK_STATIC_NOLIBC);
+		if (ret < 0) {
+			return -1;
+		}
 		cur_arg++;
 		SI_LOG_INFO("static-nolibc mode\n");
 	}
@@ -90,8 +103,11 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	elf_link_write(elf_link);
-	SI_LOG_INFO("OK\n");
+	ret = elf_link_write(elf_link);
+	if (ret < 0) {
+		return -1;
+	}
 
+	SI_LOG_INFO("OK\n");
 	return 0;
 }

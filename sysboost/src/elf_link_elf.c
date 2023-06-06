@@ -50,7 +50,6 @@ elf_link_t *elf_link_new()
 	elf_link->rela_dyn_arr = si_array_new(sizeof(elf_obj_mapping_t));
 
 	elf_link->hook_func = false;
-	elf_link->dynamic_link = true;
 	elf_link->direct_call_optimize = false;
 	elf_link->direct_vdso_optimize = false;
 	elf_link->delete_symbol_version = true;
@@ -61,33 +60,49 @@ elf_link_t *elf_link_new()
 	return elf_link;
 }
 
-void elf_link_set_mode(elf_link_t *elf_link, unsigned int mode)
+int elf_link_set_mode(elf_link_t *elf_link, unsigned int mode)
 {
+	elf_file_t *ef = NULL;
+
 	if (mode != ELF_LINK_STATIC && mode != ELF_LINK_STATIC_NOLIBC) {
-		return;
+		return -1;
 	}
 
 	elf_link->link_mode = mode;
-	elf_link->dynamic_link = false;
 	elf_link->direct_call_optimize = true;
 	// TODO: feature, probe AUX parameter
 	elf_link->direct_vdso_optimize = false;
 
 	if (elf_link->in_ef_nr != 0) {
-		si_panic("set mode must before add elf file\n");
+		SI_LOG_ERR("set mode must before add elf file\n");
+		return -1;
 	}
 
 	// static mode use template
 	if (mode == ELF_LINK_STATIC_NOLIBC) {
-		elf_link_add_infile(elf_link, RELOCATION_ROOT_DIR "/sysboost_static_template.relocation");
+		ef = elf_link_add_infile(elf_link, RELOCATION_ROOT_DIR "/sysboost_static_template.relocation");
 	} else {
-		elf_link_add_infile(elf_link, LD_SO_STATIC_TEMPLATE);
+		ef = elf_link_add_infile(elf_link, LD_SO_STATIC_TEMPLATE);
 	}
+
+	if (ef == NULL) {
+		SI_LOG_ERR("template file init fail\n");
+		return -1;
+	}
+
+	return 0;
 }
 
 static int elf_link_prepare(elf_link_t *elf_link)
 {
 	char name[PATH_MAX] = {0};
+
+	if (elf_link->link_mode == ELF_LINK_SHARE && elf_link->hook_func) {
+		elf_link->hook_func_ef = elf_link_add_infile(elf_link, RELOCATION_ROOT_DIR "/libhook.so.relocation");
+		if (elf_link->hook_func_ef == NULL) {
+			return -1;
+		}
+	}
 
 	if (elf_link->out_ef.fd != -1) {
 		return 0;
@@ -107,13 +122,6 @@ elf_file_t *elf_link_add_infile(elf_link_t *elf_link, char *path)
 		return NULL;
 	}
 	elf_link->in_ef_nr++;
-
-	// TODO: clean code, add param -hook
-	if (strcmp(LIBHOOK, si_basename(path)) == 0) {
-		elf_link->hook_func = true;
-		elf_link->hook_func_ef = ef;
-		SI_LOG_DEBUG("hook func\n");
-	}
 
 	// TODO: clean code, do not use libc_ef
 	if (strncmp("libc.so", si_basename(path), sizeof("libc.so") - 1) == 0) {
@@ -839,7 +847,7 @@ static int dynamic_merge_lib_one(elf_link_t *elf_link, elf_file_t *ef, Elf64_Dyn
 			continue;
 		}
 		// In static-pic mode, all DT_NEEDED should be deleted.
-		if (!elf_link->dynamic_link)
+		if (!is_share_mode(elf_link))
 			continue;
 		*dst_dyn = *dyn;
 		// fix name index
@@ -1310,7 +1318,7 @@ char *disabled_funcs[] = {
 #define X86_64_INSN_RET 0xC3
 static void modify_init_and_fini(elf_link_t *elf_link)
 {
-	if (elf_link->dynamic_link == true) {
+	if (is_share_mode(elf_link) == true) {
 		return;
 	}
 	Elf64_Ehdr *hdr = elf_link->out_ef.hdr;
@@ -1384,11 +1392,10 @@ static void elf_link_write_sections(elf_link_t *elf_link)
 	 */
 }
 
-void elf_link_write(elf_link_t *elf_link)
+int elf_link_write(elf_link_t *elf_link)
 {
-	if (elf_link_prepare(elf_link) == -1) {
-		SI_LOG_INFO("out file not ready\n");
-		return;
+	if (elf_link_prepare(elf_link) < 0) {
+		return -1;
 	}
 
 	// copy first LOAD segment
@@ -1398,7 +1405,7 @@ void elf_link_write(elf_link_t *elf_link)
 	elf_link_write_sections(elf_link);
 
 	// PHDR segment
-	if (elf_link->dynamic_link) {
+	if (is_share_mode(elf_link)) {
 		modify_PHDR_segment(elf_link);
 		modify_INTERP_segment(elf_link);
 	}
@@ -1446,5 +1453,5 @@ void elf_link_write(elf_link_t *elf_link)
 
 	elf_check_elf(elf_link);
 
-	return;
+	return 0;
 }
