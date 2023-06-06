@@ -12,6 +12,10 @@ if cc.has_argument('-Wno-format-truncation')
     default_cflags += '-Wno-format-truncation'
 endif
 
+if get_option('buildtype').contains('debug')
+	default_cflags += [ '-DDEBUG' ]
+endif
+
 enabled_libs = [] # used to print summary at the end
 
 foreach l:libraries
