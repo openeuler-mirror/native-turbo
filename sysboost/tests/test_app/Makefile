@@ -1,72 +1,68 @@
 # SPDX-License-Identifier: MulanPSL-2.0
 ROOT_DIR=../../../
 BUILD_DIR=$(ROOT_DIR)build/
-TEMPLATE_FILE=$(BUILD_DIR)sysboost/src/static_template/sysboost_static_template
 SYSBOOST=$(BUILD_DIR)sysboost/sysboost
-TEST_APP=$(BUILD_DIR)sysboost/test/test_app/test_app
-LIB1=$(BUILD_DIR)sysboost/test/test_app/libutil1.so
-LIB2=$(BUILD_DIR)sysboost/test/test_app/libutil2.so
-LIBHOOK=$(BUILD_DIR)sysboost/src/libhook/libhook.so
-LIBC=../bash/libc.so
+TEST_APP=$(BUILD_DIR)sysboost/tests/test_app/test_app
+LIB1=$(BUILD_DIR)sysboost/tests/test_app/libutil1.so
+LIB2=$(BUILD_DIR)sysboost/tests/test_app/libutil2.so
 
-TEMPLATE_FILE_PUB_PATH=/usr/bin/sysboost_static_template
+LIBHOOK=$(BUILD_DIR)sysboost/src/libhook/libhook.so
+LIBHOOK_R=/usr/lib/relocation/libhook.so.relocation
+
+LIBC=/usr/lib64/libc.so.6
+LIBC_R=/usr/lib/relocation$(LIBC).relocation
+
 
 .PHONY: all
 
 all: test-s
 
-static_template_debug:
-	readelf -W -a $(TEMPLATE_FILE) > sysboost_static_template.elf
-	objdump -d $(TEMPLATE_FILE) > sysboost_static_template.asm
-
-# DYN mod
-test-d:
+prepare:
 	make -C $(ROOT_DIR)
 	readelf -W -a $(TEST_APP) > test_app.elf
 	objdump -d $(TEST_APP) > test_app.asm
 	readelf -W -a $(LIB1) > libutil1.so.elf
 	objdump -d $(LIB1) > libutil1.so.asm
+	cp $(LIB1) .
+
+# share mode, --hook
+hook: prepare
 	readelf -W -a $(LIBHOOK) > libhook.so.elf
 	objdump -d $(LIBHOOK) > libhook.so.asm
-	cp $(LIB1) .
 	clear
-	@echo ===rto===
-	$(SYSBOOST) $(TEST_APP) $(LIB1) $(LIB2) $(LIBHOOK)
-	readelf -W -a test_app.rto > test_app.rto.elf
-	objdump -d test_app.rto > test_app.rto.asm
+	xz $(LIBHOOK)
+	mv -f $(LIBHOOK).xz $(LIBHOOK_R)
+	@echo ===rto1===
+	$(SYSBOOST) --hook $(TEST_APP) $(LIB1) $(LIB2)
+	readelf -W -a $(TEST_APP).rto > test_app.rto.elf
+	objdump -d $(TEST_APP).rto > test_app.rto.asm
 	@echo ===run_ori===
 	$(TEST_APP) -dlsym
-	@echo ===run===
-	./test_app.rto -dlsym
+	@echo ===run1===
+	$(TEST_APP).rto -dlsym
 
-rto-d:
-	gdb --args $(SYSBOOST) $(TEST_APP) $(LIB1) $(LIB2) $(LIBHOOK)
+rto1:
+	gdb --args $(SYSBOOST) --hook $(TEST_APP) $(LIB1) $(LIB2)
 
-run-d:
+run1:
 	gdb --args ./test_app.rto -dlsym
 
-# static mod
-test-s: static_template_debug
-	make -C $(ROOT_DIR)
-	readelf -W -a $(TEST_APP) > test_app.elf
-	objdump -d $(TEST_APP) > test_app.asm
-	readelf -W -a $(LIB1) > libutil1.so.elf
-	objdump -d $(LIB1) > libutil1.so.asm
-	cp -f $(TEMPLATE_FILE) $(TEMPLATE_FILE_PUB_PATH)
+# static mode
+test-s: prepare
 	clear
-	@echo ===rto-s===
+	@echo ===rto===
 	$(SYSBOOST) -static $(TEST_APP) $(LIB1) $(LIB2) $(LIBC)
-	readelf -W -a test_app.rto > test_app.rto.elf
-	objdump -d test_app.rto > test_app.rto.asm
+	readelf -W -a $(TEST_APP).rto > test_app.rto.elf
+	objdump -d $(TEST_APP).rto > test_app.rto.asm
 	@echo ===run-ori===
 	$(TEST_APP)
-	@echo ===run-s===
+	@echo ===run===
 	./test_app.rto
 
-rto-s:
+rto:
 	gdb --args $(SYSBOOST) -static $(TEST_APP) $(LIB1) $(LIB2) $(LIBC)
 
-run-s:
+run:
 	gdb --args ./test_app.rto
 
 env:

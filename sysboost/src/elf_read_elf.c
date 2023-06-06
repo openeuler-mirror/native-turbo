@@ -595,6 +595,7 @@ int elf_read_file(char *file_name, elf_file_t *ef, bool is_readonly)
 		return -1;
 	}
 
+	// this memory will free by process exit
 	ef->file_name = strdup(file_name);
 	return 0;
 }

@@ -57,7 +57,6 @@ typedef struct {
 	bool delete_symbol_version;
 	bool direct_call_optimize;
 	bool direct_vdso_optimize;
-	bool dynamic_link;
 	// use libhook func to hook libc
 	bool hook_func;
 	unsigned long so_path_struct;
@@ -83,9 +82,14 @@ typedef struct {
 	void *dst_obj;
 } elf_obj_mapping_t;
 
+static inline bool is_share_mode(elf_link_t *elf_link)
+{
+	return elf_link->link_mode == ELF_LINK_SHARE;
+}
+
 static inline bool is_static_mode(elf_link_t *elf_link)
 {
-	return !elf_link->dynamic_link;
+	return elf_link->link_mode == ELF_LINK_STATIC;
 }
 
 static inline bool is_static_nolibc_mode(elf_link_t *elf_link)
@@ -122,7 +126,7 @@ static inline elf_file_t *get_template_ef(elf_link_t *elf_link)
 
 static inline elf_file_t *get_main_ef(elf_link_t *elf_link)
 {
-	if (elf_link->dynamic_link == true) {
+	if (is_share_mode(elf_link) == true) {
 		return &elf_link->in_efs[0];
 	}
 

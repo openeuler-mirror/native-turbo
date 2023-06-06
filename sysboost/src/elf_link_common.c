@@ -494,7 +494,7 @@ static unsigned long _get_new_addr_by_sym_name(elf_link_t *elf_link, char *sym_n
 			goto out;
 	}
 
-	if (elf_link->dynamic_link == false)
+	if (is_share_mode(elf_link) == false)
 		si_panic("not found symbol %s\n", sym_name);
 
 out:

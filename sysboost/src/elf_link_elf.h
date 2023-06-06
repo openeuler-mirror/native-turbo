@@ -8,8 +8,8 @@
 #include "si_common.h"
 
 elf_link_t *elf_link_new(void);
-void elf_link_set_mode(elf_link_t *elf_link, unsigned int mode);
+int elf_link_set_mode(elf_link_t *elf_link, unsigned int mode);
 elf_file_t *elf_link_add_infile(elf_link_t *elf_link, char *name);
-void elf_link_write(elf_link_t *elf_link);
+int elf_link_write(elf_link_t *elf_link);
 
 #endif /* _LINK_ELF_H */

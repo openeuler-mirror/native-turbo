@@ -66,6 +66,7 @@ void elf_set_hugepage(elf_link_t *elf_link)
 
 int elf_set_aot(char *path, bool state)
 {
+	// this memory will free by process exit
 	elf_file_t *ef = malloc(sizeof(elf_file_t));
 	if (ef == NULL) {
 		SI_LOG_ERR("malloc fail\n");

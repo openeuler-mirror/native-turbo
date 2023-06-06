@@ -201,6 +201,11 @@ static void modify_insn_func_offset(elf_link_t *elf_link, elf_file_t *ef, Elf64_
 	unsigned long loc = get_new_addr_by_old_addr(elf_link, ef, rela->r_offset);
 	unsigned long sym_addr = get_new_addr_by_sym(elf_link, ef, sym);
 	if (sym_addr == 0) {
+		// share mode libc func is use plt, no need change
+		if (is_share_mode(elf_link)) {
+			return;
+		}
+
 		const char *sym_name = elf_get_symbol_name(ef, sym);
 		if (is_symbol_maybe_undefined(sym_name)) {
 			goto out;
@@ -387,7 +392,7 @@ void modify_rela_plt(elf_link_t *elf_link, si_array_t *arr)
 		elf_write_jmp_addr(out_ef, new_plt_addr + 6, new_plt_start_addr);
 	}
 
-	if (elf_link->dynamic_link == false)
+	if (is_share_mode(elf_link) == false)
 		return;
 
 	// TODO: feature, change addr for lazy lookup sym, this time not support lazy

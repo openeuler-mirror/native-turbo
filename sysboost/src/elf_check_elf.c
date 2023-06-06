@@ -48,7 +48,7 @@ static bool is_dynsym_valid(Elf64_Sym *sym, const char *name)
 
 static void check_rela_dyn(elf_link_t *elf_link)
 {
-	if (elf_link->dynamic_link) {
+	if (is_share_mode(elf_link)) {
 		return;
 	}
 
@@ -80,7 +80,7 @@ static void check_dynamic(elf_link_t *elf_link)
 	elf_file_t *out_ef = &elf_link->out_ef;
 	Elf64_Shdr *sec = elf_find_section_by_name(out_ef, ".dynamic");
 
-	if (elf_link->dynamic_link == false)
+	if (is_share_mode(elf_link) == false)
 		return;
 
 	// dyn mode must be DT_BIND_NOW

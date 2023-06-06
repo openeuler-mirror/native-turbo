@@ -214,7 +214,7 @@ void modify_got(elf_link_t *elf_link)
 	// got[0] is .dynamic addr
 	// TODO: clean code, aarch64 got[0] is zero when link
 	got_addr = ((void *)elf_link->out_ef.hdr) + got_sec->sh_offset;
-	if (elf_link->dynamic_link) {
+	if (is_share_mode(elf_link)) {
 		*(unsigned long *)got_addr = find_sec->sh_addr;
 	}
 
