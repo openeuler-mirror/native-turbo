@@ -353,6 +353,7 @@ int main(void)
 	_dl_debug_printf("begin run 0x%016lx\n", (unsigned long)g_main);
 	g_main();
 	_dl_debug_printf("run OK\n");
+	close(fd);
 
 	return 0;
 }

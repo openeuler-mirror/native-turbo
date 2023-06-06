@@ -134,6 +134,7 @@ int create_elf_file(char *file_name, elf_file_t *elf_file)
 	elf_file->hdr = mmap(0, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (elf_file->hdr == MAP_FAILED) {
 		si_panic("mmap fail %d\n ", errno);
+		close(fd);
 		return -1;
 	}
 
