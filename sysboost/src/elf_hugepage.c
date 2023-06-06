@@ -80,5 +80,7 @@ int elf_set_aot(char *path, bool state)
 	_elf_set_aot(ef, state);
 
 	close(ef->fd);
+	// This process is a oneshot process. The release of variable ef depends
+	// on the process exit.
 	return 0;
 }
