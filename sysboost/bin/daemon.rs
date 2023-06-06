@@ -206,7 +206,7 @@ fn parse_config(contents: String) -> Option<RtoConfig> {
 	};
 
 	let conf = conf_e.unwrap();
-	if conf.mode != "static" && conf.mode != "share" {
+	if conf.mode != "static" && conf.mode != "static-nolibc" && conf.mode != "share" {
 		return None;
 	}
 	if conf.elf_path == SYSBOOST_PATH {

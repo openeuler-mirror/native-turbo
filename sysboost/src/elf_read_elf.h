@@ -6,6 +6,7 @@
 #include <stdbool.h>
 
 #define NEED_CLEAR_RELA (-2)
+#define RELOCATION_ROOT_DIR "/usr/lib/relocation"
 
 typedef struct {
 	Elf64_Ehdr *hdr;
@@ -32,6 +33,7 @@ typedef struct {
 
 	int fd;
 	unsigned long length;
+	bool is_xz_file;
 	char *file_name;
 	char *build_id;
 } elf_file_t;
@@ -99,5 +101,10 @@ int elf_read_file(char *file_name, elf_file_t *elf, bool is_readonly);
 void elf_show_dynsym(elf_file_t *ef);
 void elf_show_sections(elf_file_t *ef);
 void elf_show_segments(elf_file_t *ef);
+
+// elf_read_elf_xz.c
+bool elf_is_xz_file(elf_file_t *ef);
+int elf_load_xz(elf_file_t *ef);
+void elf_unload_xz(elf_file_t *ef);
 
 #endif /* _ELF_READ_ELF_H */

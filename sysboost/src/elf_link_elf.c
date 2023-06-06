@@ -19,6 +19,12 @@
 #include "si_debug.h"
 #include "si_log.h"
 
+#ifdef __aarch64__
+#define LD_SO_STATIC_TEMPLATE "/lib/ld-linux-aarch64.so.1"
+#else
+#define LD_SO_STATIC_TEMPLATE "/lib64/ld-linux-x86-64.so.2"
+#endif
+
 // mode: static share
 elf_link_t *elf_link_new()
 {
@@ -57,10 +63,11 @@ elf_link_t *elf_link_new()
 
 void elf_link_set_mode(elf_link_t *elf_link, unsigned int mode)
 {
-	if (mode != ELF_LINK_STATIC) {
+	if (mode != ELF_LINK_STATIC && mode != ELF_LINK_STATIC_NOLIBC) {
 		return;
 	}
 
+	elf_link->link_mode = mode;
 	elf_link->dynamic_link = false;
 	elf_link->direct_call_optimize = true;
 	// TODO: feature, probe AUX parameter
@@ -71,7 +78,11 @@ void elf_link_set_mode(elf_link_t *elf_link, unsigned int mode)
 	}
 
 	// static mode use template
-	elf_link_add_infile(elf_link, "/usr/bin/sysboost_static_template");
+	if (mode == ELF_LINK_STATIC_NOLIBC) {
+		elf_link_add_infile(elf_link, RELOCATION_ROOT_DIR "/sysboost_static_template.relocation");
+	} else {
+		elf_link_add_infile(elf_link, LD_SO_STATIC_TEMPLATE);
+	}
 }
 
 static int elf_link_prepare(elf_link_t *elf_link)
@@ -105,7 +116,7 @@ elf_file_t *elf_link_add_infile(elf_link_t *elf_link, char *path)
 	}
 
 	// TODO: clean code, do not use libc_ef
-	if (strcmp("libc.so", si_basename(path)) == 0) {
+	if (strncmp("libc.so", si_basename(path), sizeof("libc.so") - 1) == 0) {
 		elf_link->libc_ef = ef;
 	}
 
@@ -1325,8 +1336,6 @@ static void modify_init_and_fini(elf_link_t *elf_link)
 
 static void do_special_adapts(elf_link_t *elf_link)
 {
-	if (is_nolibc_mode(elf_link))
-		replace_malloc(elf_link);
 	modify_init_and_fini(elf_link);
 	correct_stop_libc_atexit(elf_link);
 }

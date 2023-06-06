@@ -504,21 +504,37 @@ out:
 	return get_new_addr_by_old_addr(elf_link, ef, sym->st_value);
 }
 
-static unsigned long _get_ifunc_new_addr_by_dl(elf_link_t *elf_link, elf_file_t *ef, char *sym_name)
+static char *get_ifunc_nice_name(char *sym_name)
+{
+	if (sym_name == NULL)
+		return sym_name;
+
+	// ignore prefix of __memchr __strlen __GI_strlen __GI___strnlen __libc_memmove
+	// direct cmp char for performace, compile will optimize branch
+	if ((sym_name[0] == '_') && (sym_name[1] == '_') && (sym_name[2] == 'G') && (sym_name[3] == 'I') && (sym_name[4] == '_') && (sym_name[5] == '_') && (sym_name[6] == '_')) {
+		return sym_name + 7;
+	}
+	if ((sym_name[0] == '_') && (sym_name[1] == '_') && (sym_name[2] == 'G') && (sym_name[3] == 'I') && (sym_name[4] == '_')) {
+		return sym_name + 5;
+	}
+	if ((sym_name[0] == '_') && (sym_name[1] == '_') && (sym_name[2] == 'l') && (sym_name[3] == 'i') && (sym_name[4] == 'b') && (sym_name[5] == 'c') && (sym_name[6] == '_')) {
+		return sym_name + 7;
+	}
+	if ((sym_name[0] == '_') && (sym_name[1] == '_')) {
+		return sym_name + 2;
+	}
+	return sym_name;
+}
+
+static unsigned long _get_ifunc_new_addr_by_dl(elf_link_t *elf_link, elf_file_t *ef, Elf64_Sym *sym, char *sym_name)
 {
 	// find ifunc real addr
 	// dlopen cannot dynamically load position-independent executable
 	elf_file_t *template_ef = get_template_ef(elf_link);
 	if (template_ef == ef) {
-		// use libc.so
-		ef = elf_link->libc_ef;
-		// libc.so has func __memchr __strlen, but dlsym can not found it
-		if (strcmp(sym_name, "__memchr") == 0) {
-			sym_name = "memchr";
-		}
-		if (strcmp(sym_name, "__strlen") == 0) {
-			sym_name = "strlen";
-		}
+		// ld.so just have one IFUNC
+		// 701: 0000000000015ec0    40 IFUNC   LOCAL  DEFAULT   13 __x86_cpu_features
+		return get_new_addr_by_old_addr(elf_link, ef, sym->st_value);
 	}
 	void *handle = dlopen(ef->file_name, RTLD_NOW);
 	if (!handle) {
@@ -530,7 +546,13 @@ static unsigned long _get_ifunc_new_addr_by_dl(elf_link_t *elf_link, elf_file_t 
 	unsigned long func = (unsigned long)dlsym(handle, sym_name);
 	char *error = dlerror();
 	if (error != NULL) {
-		si_panic("%s\n", error);
+		// libc.so has func __memchr __strlen __GI_strlen, but dlsym can not found it
+		sym_name = get_ifunc_nice_name(sym_name);
+		func = (unsigned long)dlsym(handle, sym_name);
+		error = dlerror();
+		if (error != NULL) {
+			si_panic("%s\n", error);
+		}
 	}
 
 	// handle point to link_map, link_map->l_addr is base addr of ELF
@@ -566,14 +588,14 @@ static unsigned long _get_ifunc_new_addr(elf_link_t *elf_link, char *sym_name)
 	return 0;
 }
 
-static unsigned long append_ifunc_symbol(elf_link_t *elf_link, elf_file_t *ef, char *sym_name)
+static unsigned long append_ifunc_symbol(elf_link_t *elf_link, elf_file_t *ef, Elf64_Sym *sym, char *sym_name)
 {
 	unsigned long ret;
-	if (is_nolibc_mode(elf_link))
+	if (is_static_nolibc_mode(elf_link))
 		ret = _get_ifunc_new_addr(elf_link, sym_name);
 	else
 		// use ifunc return value
-		ret = _get_ifunc_new_addr_by_dl(elf_link, ef, sym_name);
+		ret = _get_ifunc_new_addr_by_dl(elf_link, ef, sym, sym_name);
 	append_symbol_mapping(elf_link, sym_name, ret);
 	SI_LOG_DEBUG("ifunc %s %16lx\n", sym_name, ret);
 
@@ -625,7 +647,7 @@ static unsigned long _get_new_addr_by_sym(elf_link_t *elf_link, elf_file_t *ef,
 		return ret;
 	}
 	if (is_direct_call_optimize(elf_link) && (ELF64_ST_TYPE(sym->st_info) == STT_GNU_IFUNC)) {
-		return append_ifunc_symbol(elf_link, ef, sym_name);
+		return append_ifunc_symbol(elf_link, ef, sym, sym_name);
 	}
 
 	// When the shndx != SHN_UNDEF, the symbol in this ELF.
