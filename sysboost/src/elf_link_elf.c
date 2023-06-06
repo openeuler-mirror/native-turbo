@@ -30,6 +30,8 @@ elf_link_t *elf_link_new()
 {
 	elf_link_t *elf_link = NULL;
 
+	// This process is a oneshot process. The release of variable elf_link
+	// depends on the process exit
 	elf_link = malloc(sizeof(elf_link_t));
 	if (!elf_link) {
 		SI_LOG_ERR("malloc fail\n");
