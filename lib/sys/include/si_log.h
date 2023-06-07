@@ -35,5 +35,9 @@ int si_log(uint32_t level, const char *format, ...);
 #define SI_LOG_INFO(format, ...) SI_LOG(SI_LOG_LEVEL_INFO, format, ##__VA_ARGS__)
 #define SI_LOG_WARNING(format, ...) SI_LOG(SI_LOG_LEVEL_WARNING, format, ##__VA_ARGS__)
 #define SI_LOG_ERR(format, ...) SI_LOG(SI_LOG_LEVEL_ERR, format, ##__VA_ARGS__)
+#ifdef DEBUG
 #define SI_LOG_DEBUG(format, ...) SI_LOG(SI_LOG_LEVEL_DEBUG, format, ##__VA_ARGS__)
+#else
+#define SI_LOG_DEBUG(format, ...)
+#endif
 #endif /* _SI_LOG_H */
