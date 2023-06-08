@@ -20,10 +20,18 @@ typedef enum LogLevel {
 void si_log_set_global_level(uint32_t level);
 int si_log(uint32_t level, const char *format, ...);
 
+// compile will warning when var is not used, so compat it
+// something is can not print in release version, so ignore SI_LOG_LEVEL_DEBUG
+#ifdef DEBUG
+#define SI_LOG_LEVEL_IGNORE 0
+#else
+#define SI_LOG_LEVEL_IGNORE SI_LOG_LEVEL_DEBUG
+#endif
+
 // Log Macro Encapsulation
 #define SI_LOG(level, format, ...)                                                           \
 	do {                                                                                 \
-		if (level >= 0) {                                                            \
+		if (level >= 0 && level != SI_LOG_LEVEL_IGNORE) {                            \
 			si_log(level, "[%s:%d] " format, __func__, __LINE__, ##__VA_ARGS__); \
 		}                                                                            \
 	} while (0)
@@ -35,9 +43,5 @@ int si_log(uint32_t level, const char *format, ...);
 #define SI_LOG_INFO(format, ...) SI_LOG(SI_LOG_LEVEL_INFO, format, ##__VA_ARGS__)
 #define SI_LOG_WARNING(format, ...) SI_LOG(SI_LOG_LEVEL_WARNING, format, ##__VA_ARGS__)
 #define SI_LOG_ERR(format, ...) SI_LOG(SI_LOG_LEVEL_ERR, format, ##__VA_ARGS__)
-#ifdef DEBUG
 #define SI_LOG_DEBUG(format, ...) SI_LOG(SI_LOG_LEVEL_DEBUG, format, ##__VA_ARGS__)
-#else
-#define SI_LOG_DEBUG(format, ...)
-#endif
 #endif /* _SI_LOG_H */
