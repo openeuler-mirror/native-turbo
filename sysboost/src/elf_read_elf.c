@@ -342,6 +342,7 @@ void read_elf_sections(elf_file_t *ef)
 	Elf64_Shdr *sechdrs = NULL;
 	Elf64_Shdr *strhdr;
 	Elf64_Nhdr *nhdr = NULL;
+	ef->build_id = NULL;
 
 	// sechdrs addr caller set when tmp writer
 	if (ef->sechdrs == NULL) {
@@ -504,6 +505,12 @@ static int _elf_read_file(char *file_name, elf_file_t *ef, bool is_readonly)
 	ret = read_elf_info(ef, is_readonly);
 	if (ret != 0) {
 		SI_LOG_ERR("read_elf_info fail, %s\n", file_name);
+		return -1;
+	}
+
+	// The build_id may not exist
+	if (!ef->build_id) {
+		SI_LOG_ERR("check build_id fail, build_id in %s is NULL.\n", file_name);
 		return -1;
 	}
 
