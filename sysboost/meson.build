@@ -49,7 +49,7 @@ foreach src:sysboosts
     link_libs = []
 
     if get_option('buildtype').contains('debug')
-        cflags += ['-Og', '-g', '-rdynamic']
+        cflags += ['-DDEBUG', '-Og', '-g', '-rdynamic']
         ldflags += ['-rdynamic']
     else
     	cflags += ['-O2']
