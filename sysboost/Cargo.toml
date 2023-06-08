@@ -11,7 +11,7 @@ default-run = "sysboostd"
 name ="sysboostd"
 path ="bin/main.rs"
 
-[dependencies]
+[target.'cfg(not(windows))'.dependencies]
 basic = { path = "libs/basic" }
 daemonize = "0.x"
 
