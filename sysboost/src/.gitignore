@@ -1,9 +1,0 @@
-sysboost
-*.out
-*.asm
-*.log
-*.rela
-*.ro
-*.old
-*.elf
-

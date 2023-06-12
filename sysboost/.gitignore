@@ -1,5 +1,0 @@
-*.lock
-*.log
-/target
-*.link
-.cargo/config.toml

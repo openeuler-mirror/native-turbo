@@ -1,3 +1,0 @@
-elf_path = "/usr/bin/bash"
-mode = "static"
-libs = "/usr/lib64/libc.so.6 /usr/lib64/libtinfo.so.6"
