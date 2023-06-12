@@ -1,9 +1,0 @@
-*.bolt
-*.out
-*.asm
-*.log
-*.rela
-*.ro
-*.old
-*.elf
-

@@ -11,20 +11,6 @@ project('DFE', 'C',
         meson_version: '>= 0.49.2'
 )
 
-# check for developer mode
-debug_mode = false
-if get_option('debug_mode').auto()
-    if meson.version().version_compare('>=0.53') # fs module available
-        fs = import('fs')
-        debug_mode = fs.is_dir('.git')
-    endif
-else
-    debug_mode = get_option('debug_mode').enabled()
-endif
-if debug_mode
-    message('## Building in Developer Mode ##')
-endif
-
 # set up some global vars for compiler, platform, configuration, etc.
 cc = meson.get_compiler('c')
 si_source_root = meson.current_source_dir()
@@ -53,7 +39,6 @@ global_inc = include_directories('.',
 # build libs
 subdir('lib')
 subdir('tests')
-subdir('sysboost')
 
 # final output, list all the libs and drivers to be built
 # this does not affect any part of the build, for information only.
