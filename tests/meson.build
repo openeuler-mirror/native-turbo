@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: MulanPSL-2.0
 
 apps = [
-        'test_array',
-	    'test_hashmap',
-        #'test_rela',
+	'test_array',
+	'test_hashmap',
 ]
 
 default_ldflags = []
