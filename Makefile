@@ -1,5 +1,20 @@
 # SPDX-License-Identifier: MulanPSL-2.0
 
+INCLUDE_SRCS += lib/sys/include/si_debug.h
+INCLUDE_SRCS += lib/sys/include/si_log.h
+INCLUDE_SRCS += lib/sys/include/si_test.h
+INCLUDE_SRCS += lib/sys/include/si_common.h
+INCLUDE_SRCS += lib/hashmap/si_hashmap.h
+INCLUDE_SRCS += lib/array/si_array.h
+INCLUDE_SRCS += lib/ring/si_ring_core.h
+INCLUDE_SRCS += lib/ring/si_ring.h
+
+STATIC_LIBS += build/lib/libsi_ring.a
+STATIC_LIBS += build/lib/libsi_array.a
+STATIC_LIBS += build/lib/libsi_hashmap.a
+STATIC_LIBS += build/lib/libsi_sys.a
+
+
 .PHONY: all init test format clean
 all:
 	ninja -C build -v
@@ -11,7 +26,6 @@ release:
 debug:
 	rm -rf build
 	meson build --buildtype=debug
-	make -C sysboost
 
 test:
 	meson test -C build
@@ -21,17 +35,8 @@ format:
 
 clean:
 	ninja -C build clean
-	make -C sysboost clean
 
-static_template_debug:
-	readelf -W -a ./build/sysboost/src/static_template/static_template > static_template.elf
-	objdump -d ./build/sysboost/src/static_template/static_template > static_template.asm
+install:
+	cp -f $(INCLUDE_SRCS) /usr/include/
+	cp -f $(STATIC_LIBS) /usr/lib64/
 
-bash-test: static_template_debug
-	clear
-	./build/sysboost/sysboost -static ./build/sysboost/src/static_template/sysboost_static_template bash/bash bash/libtinfo.so
-	readelf -W -a bash.rto > bash.rto.elf
-	objdump -d bash.rto > bash.rto.asm
-
-bash-gdb:
-	gdb --args ./build/sysboost/sysboost -static ./build/sysboost/src/static_template/static_template bash/bash bash/libtinfo.so

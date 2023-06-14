@@ -69,7 +69,7 @@ foreach l:libraries
     si_static_libraries = [static_lib] + si_static_libraries
 
     set_variable('static_si_' + name, static_dep)
-    if debug_mode
+    if get_option('buildtype').contains('debug')
         message('lib/@0@: Defining dependency "@1@"'.format(l, name))
     endif
 endforeach
