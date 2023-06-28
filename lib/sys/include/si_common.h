@@ -32,8 +32,16 @@
 #define SI_CACHE_LINE_SIZE 64
 #define SI_HUGEPAGE_ALIGN_SIZE 0x200000
 
-#define PAGE_SHIFT 12
-#define PAGE_MASK (~((1UL << PAGE_SHIFT) - 1))
+// aarch64 header file is not define PAGE_SIZE
+#ifndef PAGE_SHIFT
+#define PAGE_SHIFT              12
+#endif
+#ifndef PAGE_SIZE
+#define PAGE_SIZE               (1UL << PAGE_SHIFT)
+#endif
+#ifndef PAGE_MASK
+#define PAGE_MASK               (~(PAGE_SIZE-1))
+#endif
 
 typedef int (*si_cmp_func)(const void *a, const void *b);
 
