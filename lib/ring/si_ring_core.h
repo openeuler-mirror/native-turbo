@@ -13,11 +13,11 @@
 #ifndef _DFE_RING_CORE_H_
 #define _DFE_RING_CORE_H_
 
-#include <stdint.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include <stdint.h>
 
 #define __si_aligned(a) __attribute__((__aligned__(a)))
 #define DFE_CACHE_LINE_SIZE 64
