@@ -63,6 +63,7 @@ void si_array_free(si_array_t *_arr)
 static void si_array_maybe_expand(_si_array_t *arr, uint32_t elem_nr)
 {
 	uint32_t need_len;
+	void *tmp;
 
 	// TODO: bug, check MAX size
 
@@ -72,9 +73,9 @@ static void si_array_maybe_expand(_si_array_t *arr, uint32_t elem_nr)
 	}
 
 	need_len = max(need_len, arr->eltm_capacity * 2);
-	// realloc arr->data
-	free(arr->data);
-	arr->data = malloc(si_array_eltm_len(arr, need_len));
+	// realloc arr->data, arr->data shoulw point to the same location
+	tmp = realloc(arr->data, si_array_eltm_len(arr, need_len));
+	arr->data = tmp;
 	arr->eltm_capacity = need_len;
 }
 
