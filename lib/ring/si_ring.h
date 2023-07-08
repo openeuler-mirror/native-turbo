@@ -13,11 +13,11 @@
 #ifndef _DFE_RING_H_
 #define _DFE_RING_H_
 
-#include <si_ring_core.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include <si_ring_core.h>
 
 /*
  * Tradeoff: caller no need know free space, caller used list to store left object
