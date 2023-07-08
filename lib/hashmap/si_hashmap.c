@@ -1,4 +1,15 @@
-/* SPDX-License-Identifier: MulanPSL-2.0 */
+// Copyright (c) 2023 Huawei Technologies Co.,Ltd. All rights reserved.
+//
+// native-turbo is licensed under Mulan PSL v2.
+// You can use this software according to the terms and conditions of the Mulan
+// PSL v2.
+// You may obtain a copy of Mulan PSL v2 at:
+//         http://license.coscl.org.cn/MulanPSL2
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY
+// KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+// NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+// See the Mulan PSL v2 for more details.
+
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,13 +21,14 @@ typedef struct {
 	uint32_t nr;
 } _si_hashmap_t;
 
-si_hashmap_t *si_hashmap_new()
+si_hashmap_t *si_hashmap_new(void)
 {
 	_si_hashmap_t *map;
 
 	map = malloc(sizeof(_si_hashmap_t));
-	if (!map)
+	if (!map) {
 		return NULL;
+	}
 
 	map->nr = 0;
 	map->hash_func = NULL;
