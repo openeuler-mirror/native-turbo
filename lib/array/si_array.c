@@ -1,4 +1,15 @@
-/* SPDX-License-Identifier: MulanPSL-2.0 */
+// Copyright (c) 2023 Huawei Technologies Co.,Ltd. All rights reserved.
+//
+// native-turbo is licensed under Mulan PSL v2.
+// You can use this software according to the terms and conditions of the Mulan
+// PSL v2.
+// You may obtain a copy of Mulan PSL v2 at:
+//         http://license.coscl.org.cn/MulanPSL2
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY
+// KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+// NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+// See the Mulan PSL v2 for more details.
+
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,19 +27,23 @@ typedef struct {
 #define si_array_eltm_pos(arr, i) ((arr)->data + si_array_eltm_len((arr), (i)))
 
 #define DEFAULT_ARRAY_CAP 32
+// define max element size is 512M
+#define MAX_ELEMENT_SIZE 536870912 
 
 si_array_t *si_array_new(uint32_t elem_size)
 {
 	_si_array_t *arr;
 
-	if (elem_size == 0)
+	if (elem_size == 0 || elem_size > MAX_ELEMENT_SIZE) {
 		return NULL;
+	}
 
 	// TODO: bug, check MAX size
 
 	arr = malloc(sizeof(_si_array_t));
-	if (!arr)
+	if (!arr) {
 		return NULL;
+	}
 	arr->data = malloc(elem_size * DEFAULT_ARRAY_CAP);
 	arr->len = 0;
 	arr->eltm_capacity = DEFAULT_ARRAY_CAP;
@@ -48,17 +63,18 @@ void si_array_free(si_array_t *_arr)
 static void si_array_maybe_expand(_si_array_t *arr, uint32_t elem_nr)
 {
 	uint32_t need_len;
-	void *tmp;
 
 	// TODO: bug, check MAX size
 
 	need_len = arr->len + elem_nr;
-	if (need_len <= arr->eltm_capacity)
+	if (need_len <= arr->eltm_capacity) {
 		return;
+	}
 
 	need_len = max(need_len, arr->eltm_capacity * 2);
-	tmp = realloc(arr->data, si_array_eltm_len(arr, need_len));
-	arr->data = tmp;
+	// realloc arr->data
+	free(arr->data);
+	arr->data = malloc(si_array_eltm_len(arr, need_len));
 	arr->eltm_capacity = need_len;
 }
 
@@ -66,8 +82,9 @@ int si_array_append_vals(si_array_t *_arr, void *data, uint32_t elem_nr)
 {
 	_si_array_t *arr = (_si_array_t *)_arr;
 
-	if (!arr || (elem_nr == 0))
+	if (!arr || (elem_nr == 0)) {
 		return -1;
+	}
 
 	si_array_maybe_expand(arr, elem_nr);
 
@@ -82,13 +99,14 @@ void si_array_sort(si_array_t *_arr, si_cmp_func cmp_func)
 {
 	_si_array_t *arr = (_si_array_t *)_arr;
 
-	if (arr->len == 0)
+	if (arr->len == 0) {
 		return;
+	}
 
 	qsort(arr->data, arr->len, arr->eltm_size, cmp_func);
 }
 
-si_array_t *si_array_new_strings()
+si_array_t *si_array_new_strings(void)
 {
 	return si_array_new(sizeof(char *));
 }
@@ -131,8 +149,9 @@ void si_array_foreach_strings(si_array_t *_arr, si_foreach_func foreach_func, vo
 {
 	_si_array_t *arr = (_si_array_t *)_arr;
 
-	if (arr->len == 0)
+	if (arr->len == 0) {
 		return;
+	}
 
 	int len = _arr->len;
 	char **string_arr = _arr->data;
