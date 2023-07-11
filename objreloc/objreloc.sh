@@ -12,4 +12,6 @@ fi
 
 # Remove debug and unnecessary sections, and create relocation and primary files
 objcopy --strip-debug --strip-dwo --strip-unneeded "$LIB_FILE" "$LIB_FILE.relocation"
-objcopy --remove-relocations=".*" "$LIB_FILE" "$LIB_FILE.prim"
+xz -z "$LIB_FILE.relocation"
+mv -f "$LIB_FILE.relocation.xz" "$LIB_FILE.relocation"
+# objcopy --remove-relocations=".*" "$LIB_FILE" "$LIB_FILE.prim"
