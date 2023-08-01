@@ -39,4 +39,6 @@ clean:
 install:
 	cp -f $(INCLUDE_SRCS) /usr/include/
 	cp -f $(STATIC_LIBS) /usr/lib64/
+	chmod 555 objreloc/objreloc.sh
+	cp -f objreloc/objreloc.sh /usr/bin/objreloc
 
