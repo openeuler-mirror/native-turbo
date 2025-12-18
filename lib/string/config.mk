@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 WITH LLVM-exception
 
 # Subprojects to build
-SUBS = math string networking
+SUBS = string
 
 # Target architecture: aarch64, arm or x86_64
 ARCH = aarch64
@@ -59,12 +59,7 @@ endif
 #EMULATOR = sh -c 'scp $$1 user@host:/dir && ssh user@host /dir/"$$@"' --
 
 # Additional flags for subprojects.
-math-cflags =
-math-ldlibs =
-math-ulpflags =
-math-testflags =
 string-cflags = -falign-functions=64
-networking-cflags =
 
 ifeq ($(OS),Msys)
   # Libraries can be installed with pacman
@@ -120,23 +115,17 @@ math-cflags += -DWANT_SIMD_EXCEPT=$(WANT_SIMD_EXCEPT)
 WANT_EXP10_TESTS = 1
 math-cflags += -DWANT_EXP10_TESTS=$(WANT_EXP10_TESTS)
 
-# If set to 1, enable tests for C23 routines.
-# These functions are only supported on aarch64
+# If set to 1, enable tests for sinpi and cospi. These functions are
+# only supported on aarch64
 ifeq ($(ARCH),aarch64)
-  WANT_C23_TESTS = 1
+  WANT_TRIGPI_TESTS = 1
 else
-  WANT_C23_TESTS = 0
+  WANT_TRIGPI_TESTS = 0
 endif
-math-cflags += -DWANT_C23_TESTS=$(WANT_C23_TESTS)
+math-cflags += -DWANT_C23_TESTS=$(WANT_TRIGPI_TESTS)
 
 # Remove GNU Property Notes from asm files.
 #string-cflags += -DWANT_GNU_PROPERTY=0
-
-# Enable assertion checks.
-#networking-cflags += -DWANT_ASSERT
-
-# Avoid auto-vectorization of scalar code and unroll loops
-networking-cflags += -O2 -fno-tree-vectorize -funroll-loops
 
 # Provide *_finite symbols and some of the glibc hidden symbols
 # so libmathlib can be used with binaries compiled against glibc
