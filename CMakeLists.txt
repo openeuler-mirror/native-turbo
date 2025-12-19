@@ -1,3 +1,4 @@
+#used for compiling the library under lib/string
 cmake_minimum_required(VERSION 3.14)
 project(memcpy C ASM)          # 必须同时启用 ASM，否则 .S 文件不会被编译
 
@@ -25,7 +26,7 @@ if(NOT MEMCPY_ARCH)
 endif()
 
 #---------- 源码收集 ----------
-set(_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/string/${MEMCPY_ARCH}")
+set(_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/string/string/${MEMCPY_ARCH}")
 file(GLOB_RECURSE MEMCPY_SRCS CONFIGURE_DEPENDS
      "${_SRC_DIR}/*.c"
      "${_SRC_DIR}/*.S" "${_SRC_DIR}/*.s")
@@ -50,11 +51,11 @@ message(STATUS "[memcpy] export memcpy as ${MEMCPY_GLIBC_VERSION}")
 # 头文件搜索路径
 target_include_directories(memcpy
     PUBLIC
-        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/string/include>"
         "$<INSTALL_INTERFACE:include>"
     PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/string/${MEMCPY_ARCH}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/string")
+        "${CMAKE_CURRENT_SOURCE_DIR}/lib/string/string/${MEMCPY_ARCH}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/lib/string/string")
 
 # 编译 / 链接选项
 target_compile_options(memcpy PRIVATE
@@ -74,7 +75,7 @@ install(TARGETS memcpy
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 # 2. 头文件（保持原样）
-set(_INC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/string/include")
+set(_INC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/string/string/include")
 if(EXISTS "${_INC_DIR}")
   install(DIRECTORY "${_INC_DIR}/"
           DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
@@ -82,7 +83,7 @@ if(EXISTS "${_INC_DIR}")
 endif()
 
 # 3. cmake 配置文件（保持原样）
-install(FILES       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/memcpy-config.cmake"
+install(FILES       "${CMAKE_CURRENT_SOURCE_DIR}/lib/string/cmake/memcpy-config.cmake"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/memcpy")
 
 # 4. 导出 Targets.cmake（保持原样）
@@ -92,13 +93,13 @@ install(EXPORT memcpyTargets
         FILE        memcpyTargets.cmake)
 
 # 5. 构建树导出（保持原样）
-# export(EXPORT memcpyTargets
-#        FILE "${CMAKE_CURRENT_BINARY_DIR}/memcpyTargets.cmake")
+export(EXPORT memcpyTargets
+        FILE "${CMAKE_CURRENT_BINARY_DIR}/memcpyTargets.cmake")
 
 #=====================================================
 #  构建并安装 libaor_memcpy_wrap.so
 #=====================================================
-set(AOR_WRAP_SRC ${CMAKE_CURRENT_SOURCE_DIR}/aor_memcpy_wrap.c)
+set(AOR_WRAP_SRC ${CMAKE_CURRENT_SOURCE_DIR}/lib/string/aor_memcpy_wrap.c)
 
 add_library(aor_memcpy_wrap SHARED ${AOR_WRAP_SRC})
 set_target_properties(aor_memcpy_wrap PROPERTIES
